@@ -1204,7 +1204,9 @@ function App() {
               if (activationHouses.has(12)) trikCommentaries.push({ house:12, title:'12th House (Vyaya/Moksha) Activation', text:'A closing cycle of release and spiritual retreat. Expenses rise but function as investment in psychological liberation.' });
               if (trikCommentaries.length === 0) trikCommentaries.push({ house:0, title:'Kendra/Kona Activation', text:'Central house activation: career, relationship, or self-expression adjustment rather than dusthana crisis.' });
 
-              allRaw.push({ ...match, trikCommentaries, referenceEvent: event, originalSignature: sig });
+              // predictFutureReoccurrences returns windows with `peakScore`;
+              // normalize to `score` (used by dedup, the score chips, and enhanceTransitWithPDFData)
+              allRaw.push({ ...match, score: match.peakScore, trikCommentaries, referenceEvent: event, originalSignature: sig });
             });
           } catch { /* skip bad event */ }
         }
