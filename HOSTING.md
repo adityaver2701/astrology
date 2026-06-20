@@ -43,9 +43,15 @@ anon key once per device in the app's **☁ Cloud Sync** settings.
 
 ## Notes
 
-- **Base path:** the app builds at root (`/`), which is what Cloudflare Pages
-  serves, so no extra config is needed. `public/_redirects` routes all paths to
-  `index.html` (standard single-page-app fallback).
+- **Base path:** the app builds at root (`/`), which is what Cloudflare serves,
+  so no extra config is needed.
+- **SPA fallback / no `_redirects`:** when you deploy with **Cloudflare Workers
+  Assets** (`wrangler deploy`, the default Vite flow), Cloudflare adds
+  `not_found_handling: "single-page-application"` automatically — do NOT add a
+  `public/_redirects` with `/* /index.html 200`, as it triggers an
+  "infinite loop detected" deploy error. (A `_redirects` file is only for the
+  *classic* Pages flow, not Workers Assets.) This app has no client-side
+  routing, so nothing extra is needed either way.
 - **Credentials are not committed.** `.env.local` is git-ignored, so the keys
   live only on your machine and in the host's environment-variable settings.
 - **Keep-alive:** free Supabase projects auto-pause after ~7 days idle (this is
