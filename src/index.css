@@ -2500,3 +2500,70 @@ body,
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* ============================================================
+   RESPONSIVE / MOBILE-FRIENDLY LAYER
+   Small-screen refinements. Kept at the end so these rules win
+   over earlier same-specificity declarations at each breakpoint.
+   ============================================================ */
+
+/* Global safety nets */
+html { -webkit-text-size-adjust: 100%; }
+body { overflow-x: hidden; }
+img, svg, video, canvas { max-width: 100%; height: auto; }
+
+/* Birth detail inputs: dense on desktop, single column on phones */
+.birth-inputs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+/* Tablet / small laptop */
+@media (max-width: 860px) {
+  .app-container { max-width: 100%; padding: 16px 0 40px; }
+  .app-header    { padding: 26px 14px 18px; }
+  .glass-card    { padding: 20px 16px; border-radius: 16px; }
+  .glass-subcard { padding: 14px 12px; }
+}
+
+/* Phones */
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  .app-container { padding: 12px 0 32px; }
+  .app-header    { padding: 20px 10px 14px; }
+  .glass-card    { padding: 16px 13px; border-radius: 14px; }
+  .glass-subcard { padding: 12px 11px; }
+
+  /* Header stacks; action buttons wrap and stay centered */
+  .header-inner   { flex-direction: column; align-items: stretch; gap: 12px; padding: 0; }
+  .header-actions { flex-wrap: wrap; justify-content: center; row-gap: 8px; }
+
+  /* Tab bar scrolls horizontally with comfortable tap targets */
+  .tab-menu { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; gap: 4px; padding: 6px; }
+  .tab-btn  { flex: 0 0 auto; padding: 9px 13px; font-size: 12px; }
+
+  /* Forms and slider rows stack */
+  .birth-inputs-grid { grid-template-columns: 1fr; gap: 12px; }
+  .slider-row        { flex-direction: column; align-items: stretch; gap: 12px; }
+
+  /* Larger tap targets; 16px inputs stop iOS from zooming on focus */
+  .btn { padding: 11px 18px; }
+  .text-input, select.text-input, input.text-input { font-size: 16px; }
+
+  /* Modals use more of the small screen */
+  .pm-overlay { padding: 10px; }
+  .pm-panel   { max-width: 100%; max-height: 94vh; border-radius: 14px; }
+  .pm-header  { padding: 14px 16px 10px; }
+
+  /* Tighter list + chart spacing */
+  .uw-item-header { padding: 11px 12px; }
+  .chart-column   { padding: 14px; }
+}
+
+/* Very small phones */
+@media (max-width: 380px) {
+  .header-title { font-size: 24px; letter-spacing: 1.5px; }
+  .glass-card   { padding: 14px 11px; }
+  .tab-btn      { padding: 8px 11px; font-size: 11px; }
+}
