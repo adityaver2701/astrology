@@ -327,8 +327,16 @@ body {
   background: #fffdf5;
 }
 
-.search-bar-row { display: flex; gap: 8px; }
-.search-input   { flex-grow: 1; }
+.search-bar-row { display: flex; gap: 8px; align-items: stretch; }
+.search-input   { flex-grow: 1; min-width: 0; }
+/* Keep the Search button from shrinking/clipping its label (e.g. "Searching...") */
+.search-bar-row .btn {
+  flex-shrink: 0;
+  min-width: 128px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* BUTTONS */
 .btn {
@@ -514,6 +522,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  min-width: 0;
   background: linear-gradient(145deg, #fffbeb 0%, #fef3c7 100%);
   border: 1.5px solid var(--border-gold-md);
   border-radius: 14px;
@@ -532,9 +541,9 @@ body {
 }
 
 .chart-svg-container {
-  width: 430px;
-  height: 430px;
-  max-width: 100%;
+  width: 100%;
+  max-width: 430px;
+  aspect-ratio: 1 / 1;
   background: var(--chart-paper);
   border-radius: 8px;
   border: 1.5px solid #e8d5a0;
@@ -2016,6 +2025,22 @@ body {
 .uw-badge-soon { background: rgba(220,38,38,0.10);  color: var(--red);          border: 1px solid rgba(220,38,38,0.35); }
 .uw-badge-next { background: rgba(234,88,12,0.10);  color: var(--amber);        border: 1px solid rgba(234,88,12,0.35); }
 .uw-badge-future { background: rgba(124,58,237,0.08); color: var(--violet);     border: 1px solid rgba(124,58,237,0.25); }
+.uw-badge-past { background: rgba(100,116,139,0.12); color: var(--text-muted); border: 1px solid rgba(100,116,139,0.30); }
+
+/* Past vs Upcoming group headers inside the windows list */
+.uw-group-header {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 9px 16px 7px;
+  margin-top: 4px;
+  border-bottom: 1px solid var(--border-gold);
+}
+.uw-group-header.uw-group-past { color: var(--text-muted); background: rgba(100,116,139,0.06); }
+.uw-group-header.uw-group-upcoming { color: var(--gold-bright); background: rgba(202,138,4,0.06); }
+.uw-item.uw-past { opacity: 0.82; border-left: 3px solid rgba(100,116,139,0.45); }
+.uw-item.uw-past:hover { opacity: 1; }
 
 .uw-date-range { font-size: 13px; color: var(--text-primary); }
 .uw-score {

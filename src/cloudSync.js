@@ -42,12 +42,46 @@ export function clearSyncConfig() {
   localStorage.removeItem(CONFIG_KEY);
 }
 
-function headers(cfg) {
-  return {
+function headers(cfg, withBody = false) {
+  const h = {
     apikey: cfg.anonKey,
-    Authorization: `Bearer ${cfg.anonKey}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${cfg.anonKey}`
   };
+  // Only set Content-Type when actually sending a body. Adding it to GET
+  // requests forces an unnecessary CORS preflight (OPTIONS) round-trip.
+  if (withBody) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+function hostOf(cfg) {
+  try {
+    return new URL(cfg.url).host;
+  } catch {
+    return cfg.url;
+  }
+}
+
+// Wraps fetch with a timeout and turns the opaque browser-level
+// "Failed to fetch" / "Load failed" / timeout into an actionable message.
+async function request(cfg, url, opts = {}, { timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (err) {
+    const host = hostOf(cfg);
+    if (err.name === 'AbortError') {
+      throw new Error(`Cloud sync timed out reaching ${host}. The Supabase project may be paused or your connection is slow. Open your Supabase dashboard and make sure the project is active.`, { cause: err });
+    }
+    // fetch() throws a TypeError ("Failed to fetch" / "Load failed" / "NetworkError")
+    // when the request never reached the server: paused project, DNS, offline, or CORS.
+    if (err instanceof TypeError) {
+      throw new Error(`Could not reach Supabase at ${host}. Most likely the free project was auto-paused after inactivity — open https://supabase.com/dashboard, select the project, and click "Restore"/"Resume". Also check your internet connection and that the Project URL is correct.`, { cause: err });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -57,7 +91,8 @@ function headers(cfg) {
  */
 export async function cloudLoad(cfg = getSyncConfig()) {
   if (!cfg) throw new Error('Cloud sync not configured');
-  const res = await fetch(
+  const res = await request(
+    cfg,
     `${cfg.url}/rest/v1/${TABLE}?id=eq.${ROW_ID}&select=data,updated_at`,
     { headers: headers(cfg) }
   );
@@ -73,10 +108,10 @@ export async function cloudLoad(cfg = getSyncConfig()) {
  */
 export async function cloudSave(data, cfg = getSyncConfig()) {
   if (!cfg) throw new Error('Cloud sync not configured');
-  const res = await fetch(`${cfg.url}/rest/v1/${TABLE}`, {
+  const res = await request(cfg, `${cfg.url}/rest/v1/${TABLE}`, {
     method: 'POST',
     headers: {
-      ...headers(cfg),
+      ...headers(cfg, true),
       Prefer: 'resolution=merge-duplicates,return=minimal'
     },
     body: JSON.stringify([{ id: ROW_ID, data, updated_at: new Date().toISOString() }])
@@ -86,7 +121,7 @@ export async function cloudSave(data, cfg = getSyncConfig()) {
 
 /** Quick connectivity/credentials check used by the settings modal. */
 export async function testConnection(cfg) {
-  const res = await fetch(`${cfg.url}/rest/v1/${TABLE}?select=id&limit=1`, {
+  const res = await request(cfg, `${cfg.url}/rest/v1/${TABLE}?select=id&limit=1`, {
     headers: headers(cfg)
   });
   if (res.status === 401 || res.status === 403) throw new Error('Invalid anon key (unauthorized).');

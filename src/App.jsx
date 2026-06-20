@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react';
 import {
   calculatePlanets,
   calculateAscendantLongitude,
@@ -1179,50 +1179,77 @@ function App() {
     const timer = setTimeout(() => {
       try {
         const today = new Date();
+        const todayMs = today.getTime();
         const scanStart = today.getFullYear();
-        const scanEnd   = scanStart + 2; // 2 years — fast enough for 40+ events
+        const scanEnd   = scanStart + 2;   // 2 years ahead — fast enough for 40+ events
+        const pastStart = scanStart - 30;  // look back 30 years for historical analogs
 
-        const allRaw = [];
+        // Build Trik Bhava commentary for a window's transits (shared by past + future)
+        const buildTrik = (match) => {
+          const activationHouses = new Set();
+          ['saturn','jupiter','rahu','ketu'].forEach(p => {
+            const h = match.transits?.[p]?.house;
+            if ([6,8,12].includes(h)) activationHouses.add(h);
+          });
+          const t = [];
+          if (activationHouses.has(6)) t.push({ house:6, title:'6th House (Shatru/Roga) Activation', text:'Service, health, and daily struggle are highlighted. Self-discipline and selfless action are your alchemical tools.' });
+          if (activationHouses.has(8)) t.push({ house:8, title:'8th House (Randhra) Activation', text:'Sudden transformation and hidden knowledge are highlighted. Surrender and regeneration yield exceptional empowerment.' });
+          if (activationHouses.has(12)) t.push({ house:12, title:'12th House (Vyaya/Moksha) Activation', text:'A closing cycle of release and spiritual retreat. Expenses rise but function as investment in psychological liberation.' });
+          if (t.length === 0) t.push({ house:0, title:'Kendra/Kona Activation', text:'Central house activation: career, relationship, or self-expression adjustment rather than dusthana crisis.' });
+          return t;
+        };
+
+        // Deduplicate raw windows by 45-day bucket (keep highest score)
+        const dedup = (raw) => {
+          const buckets = {};
+          raw.forEach(m => {
+            const key = Math.floor(m.peakDate.getTime() / (45 * 86400000));
+            if (!buckets[key] || m.score > buckets[key].score) buckets[key] = m;
+          });
+          return Object.values(buckets);
+        };
+
+        const futureRaw = [];
+        const pastRaw = [];
 
         for (const event of lifeEvents) {
           try {
             const sig = matchLifeEventTransits(birthDetails, event.startDate, event.endDate);
-            const futures = predictFutureReoccurrences(
+
+            // Upcoming reoccurrences (current year -> +2)
+            predictFutureReoccurrences(
               birthDetails, sig.eventSignature, sig.natalLagnaSign, sig.natalPlanets,
               scanStart, scanEnd
-            );
+            ).slice(0, 4).forEach(match => {
+              futureRaw.push({ ...match, score: match.peakScore, trikCommentaries: buildTrik(match), referenceEvent: event, originalSignature: sig });
+            });
 
-            futures.slice(0, 4).forEach(match => {
-              const activationHouses = new Set();
-              ['saturn','jupiter','rahu','ketu'].forEach(p => {
-                const h = match.transits?.[p]?.house;
-                if ([6,8,12].includes(h)) activationHouses.add(h);
-              });
-              const trikCommentaries = [];
-              if (activationHouses.has(6)) trikCommentaries.push({ house:6, title:'6th House (Shatru/Roga) Activation', text:'Service, health, and daily struggle are highlighted. Self-discipline and selfless action are your alchemical tools.' });
-              if (activationHouses.has(8)) trikCommentaries.push({ house:8, title:'8th House (Randhra) Activation', text:'Sudden transformation and hidden knowledge are highlighted. Surrender and regeneration yield exceptional empowerment.' });
-              if (activationHouses.has(12)) trikCommentaries.push({ house:12, title:'12th House (Vyaya/Moksha) Activation', text:'A closing cycle of release and spiritual retreat. Expenses rise but function as investment in psychological liberation.' });
-              if (trikCommentaries.length === 0) trikCommentaries.push({ house:0, title:'Kendra/Kona Activation', text:'Central house activation: career, relationship, or self-expression adjustment rather than dusthana crisis.' });
-
-              // predictFutureReoccurrences returns windows with `peakScore`;
-              // normalize to `score` (used by dedup, the score chips, and enhanceTransitWithPDFData)
-              allRaw.push({ ...match, score: match.peakScore, trikCommentaries, referenceEvent: event, originalSignature: sig });
+            // Past similar transits (previous 30 years, already-completed windows)
+            predictFutureReoccurrences(
+              birthDetails, sig.eventSignature, sig.natalLagnaSign, sig.natalPlanets,
+              pastStart, scanStart
+            ).filter(w => w.endDate.getTime() < todayMs).slice(0, 3).forEach(match => {
+              pastRaw.push({ ...match, score: match.peakScore, trikCommentaries: buildTrik(match), referenceEvent: event, originalSignature: sig });
             });
           } catch { /* skip bad event */ }
         }
 
-        // Sort chronologically then deduplicate by 45-day bucket (keep highest score)
-        allRaw.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
-        const buckets = {};
-        allRaw.forEach(m => {
-          const key = Math.floor(m.peakDate.getTime() / (45 * 86400000));
-          if (!buckets[key] || m.score > buckets[key].score) buckets[key] = m;
-        });
-        const merged = Object.values(buckets)
+        // Upcoming: strictly future windows (excludes any currently-active window)
+        const upcoming = dedup(futureRaw)
+          .filter(m => m.startDate.getTime() > todayMs)
           .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
-          .slice(0, 30);
+          .slice(0, 24)
+          .map(m => ({ ...m, _group: 'upcoming' }));
 
-        setAutoMatches(merged);
+        // Past: most-recent completed analogs first
+        const past = dedup(pastRaw)
+          .filter(m => m.endDate.getTime() < todayMs)
+          .sort((a, b) => b.startDate.getTime() - a.startDate.getTime())
+          .slice(0, 8)
+          .map(m => ({ ...m, _group: 'past' }));
+
+        // Render order: past (recent -> older) then upcoming (soonest -> later)
+        setAutoMatches([...past, ...upcoming]);
         setExpandedAutoMatch(null);
       } catch (err) {
         console.error('Auto-scan error:', err);
@@ -2582,7 +2609,7 @@ function App() {
                 <div className="uw-header">
                   <div className="uw-title">
                     🔮 Upcoming Transit Windows
-                    <span className="uw-subtitle">auto-scanned from {lifeEvents.length} life events · next 3 years</span>
+                    <span className="uw-subtitle">auto-scanned from {lifeEvents.length} life events · past analogs & upcoming</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {autoMatchesComputed && !autoMatchesLoading && (
@@ -2603,7 +2630,7 @@ function App() {
 
                 {autoMatchesComputed && !autoMatchesLoading && autoMatches.length === 0 && (
                   <p style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '12px 0' }}>
-                    No significant transit matches found in the next 3 years. Try adding more life events.
+                    No matching transit windows (past or upcoming) found. Try adding more life events.
                   </p>
                 )}
 
@@ -2620,6 +2647,11 @@ function App() {
                       const isNow = today >= startDate && today <= endDate;
                       const isThisMonth = !isNow && daysToStart >= 0 && daysToStart <= 35;
                       const isNextMonth = !isNow && !isThisMonth && daysToStart > 35 && daysToStart <= 70;
+                      const isPast = match._group === 'past' || endDate.getTime() < today.getTime();
+                      const monthsAgo = Math.round((today.getTime() - endDate.getTime()) / (30.4 * 86400000));
+                      const pastAgoLabel = monthsAgo >= 12 ? `${Math.round(monthsAgo/12)}y ago` : `${Math.max(1, monthsAgo)}mo ago`;
+                      const grp = match._group;
+                      const showGroupHeader = idx === 0 || autoMatches[idx - 1]._group !== grp;
 
                       const { currentMahadasha, currentAntardasha } = dashaData
                         ? getCurrentDasha(dashaData, peakDate) : {};
@@ -2632,11 +2664,18 @@ function App() {
                       })();
 
                       return (
-                        <div key={idx} className={`uw-item${isExpanded ? ' expanded' : ''}${isNow ? ' uw-now' : ''}`}>
+                        <Fragment key={idx}>
+                        {showGroupHeader && (
+                          <div className={`uw-group-header ${grp === 'past' ? 'uw-group-past' : 'uw-group-upcoming'}`}>
+                            {grp === 'past' ? '↩ Past similar transits (already occurred)' : '🔮 Upcoming windows'}
+                          </div>
+                        )}
+                        <div className={`uw-item${isExpanded ? ' expanded' : ''}${isNow ? ' uw-now' : ''}${isPast ? ' uw-past' : ''}`}>
                           {/* ── Window Header ── */}
                           <div className="uw-item-header" onClick={() => setExpandedAutoMatch(isExpanded ? null : idx)}>
                             <div className="uw-item-left">
                               {/* Time badge */}
+                              {isPast && <span className="uw-badge uw-badge-past">↩ {pastAgoLabel}</span>}
                               {isNow && <span className="uw-badge uw-badge-now">● NOW</span>}
                               {isThisMonth && <span className="uw-badge uw-badge-soon">This Month</span>}
                               {isNextMonth && <span className="uw-badge uw-badge-next">Next Month</span>}
@@ -2768,6 +2807,7 @@ function App() {
                             </div>
                           )}
                         </div>
+                        </Fragment>
                       );
                     })}
                   </div>
