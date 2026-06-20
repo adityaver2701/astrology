@@ -24,7 +24,13 @@ import {
   shadbalLabel,
   getPDFDataSummary,
 } from './astrologyEngine';
-import { getSyncConfig, setSyncConfig, clearSyncConfig, cloudLoad, cloudSave, testConnection } from './cloudSync';
+import {
+  getSyncConfig, setSyncConfig, clearSyncConfig, isSupabaseConfigured,
+  cloudLoad, cloudSave, testConnection,
+  signOut, getSession, onAuthChange,
+  uploadReport, getReportUrl, deleteReport,
+} from './cloudSync';
+import AuthScreen from './AuthScreen';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
 // Orbital periods (days). Negative = retrograde (Rahu/Ketu).
@@ -53,6 +59,17 @@ const PROFILE_COLORS = [
   '#dc2626', '#ea580c', '#4f46e5', '#be185d',
   '#0d9488', '#92400e'
 ];
+
+// Neutral starting birth details for a fresh account (no hardcoded person).
+const DEFAULT_BIRTH = {
+  name: '',
+  date: '2000-01-01',
+  time: '12:00',
+  placeName: 'New Delhi, Delhi, India',
+  latitude: 28.6139,
+  longitude: 77.2090,
+  timezone: 5.5,
+};
 
 // Planet long name helper
 const PLANET_NAMES = {
@@ -311,15 +328,7 @@ function App() {
         console.error(e);
       }
     }
-    return {
-      name: 'Aditya',
-      date: '1995-10-15',
-      time: '08:30',
-      placeName: 'New Delhi, Delhi, India',
-      latitude: 28.6139,
-      longitude: 77.2090,
-      timezone: 5.5
-    };
+    return { ...DEFAULT_BIRTH };
   });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -441,6 +450,55 @@ function App() {
   const lastPushedJsonRef = useRef(null);   // avoids re-pushing identical data
   const syncTimerRef = useRef(null);
 
+  // ── Auth (Supabase) ────────────────────────────────────────────────────
+  // session: undefined = still checking · null = signed out · object = signed in
+  const authConfigured = isSupabaseConfigured();
+  const [session, setSession] = useState(() => (authConfigured ? undefined : null));
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const user = session?.user || null;
+
+  // Initialise session from persisted storage and subscribe to changes.
+  useEffect(() => {
+    if (!authConfigured) return;
+    let unsub = () => {};
+    (async () => {
+      try {
+        const s = await getSession();
+        setSession(s);
+      } catch {
+        setSession(null);
+      }
+      unsub = onAuthChange((_event, s2) => setSession(s2));
+    })();
+    return () => unsub();
+  }, [authConfigured]);
+
+  // Reset all in-memory + cached data (used on sign-out and fresh accounts so
+  // one user's data never lingers for the next on a shared browser).
+  const resetLocalData = useCallback(() => {
+    setSavedProfiles([]);
+    setSavedPredictions([]);
+    setLifeEvents([]);
+    setActiveProfileId(null);
+    setBirthDetails({ ...DEFAULT_BIRTH });
+    setPredictionResults(null);
+    setSelectedEventId(null);
+    setDegreeAlignments([]);
+    setHasScannedAlignments(false);
+    setHistoricalTransits([]);
+    ['astro_active_profile_id', 'astro_saved_profiles', 'astro_saved_predictions',
+     'astro_birth_details', 'astro_life_events'].forEach(k => localStorage.removeItem(k));
+  }, []);
+
+  const handleSignOut = useCallback(async () => {
+    setShowUserMenu(false);
+    cloudReadyRef.current = false;
+    lastPushedJsonRef.current = null;
+    try { await signOut(); } catch (e) { console.error('sign out', e); }
+    resetLocalData();
+    setSyncStatus('off');
+  }, [resetLocalData]);
+
   // Fixed-key-order serialization for change detection (jsonb reorders keys)
   const canonicalBundleJson = (d) => JSON.stringify({
     version: 1,
@@ -463,12 +521,20 @@ function App() {
     }
   }, []);
 
-  // Startup: pull from cloud (cloud wins). If the cloud is empty, the auto-save
-  // effect below pushes the current local data up instead.
+  // Per-user startup pull: when a user signs in, load THEIR row (cloud wins).
+  // A fresh account starts empty. Runs again whenever the signed-in user changes.
   useEffect(() => {
-    if (!getSyncConfig()) return;
+    if (!authConfigured) return;
+    if (session === undefined) return;        // auth still resolving
+    if (!user) {                              // signed out
+      cloudReadyRef.current = false;
+      lastPushedJsonRef.current = null;
+      return;
+    }
     let cancelled = false;
+    cloudReadyRef.current = false;
     (async () => {
+      setSyncStatus('loading');
       try {
         const row = await cloudLoad();
         if (cancelled) return;
@@ -476,10 +542,11 @@ function App() {
           applyCloudBundle(row.data);
           lastPushedJsonRef.current = canonicalBundleJson(row.data);
         } else {
-          // Cloud empty: seed it with current local data
+          // Fresh account: start clean and seed an empty bundle for this user.
+          resetLocalData();
           const bundle = {
-            version: 1, savedProfiles, savedPredictions, activeProfileId,
-            birthDetails, lifeEvents, savedAt: new Date().toISOString()
+            version: 1, savedProfiles: [], savedPredictions: [], activeProfileId: null,
+            birthDetails: { ...DEFAULT_BIRTH }, lifeEvents: [], savedAt: new Date().toISOString()
           };
           await cloudSave(bundle);
           lastPushedJsonRef.current = canonicalBundleJson(bundle);
@@ -497,11 +564,11 @@ function App() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id, session === undefined]);
 
   // Auto-save: debounced push of the full bundle whenever synced data changes.
   useEffect(() => {
-    if (!getSyncConfig() || !cloudReadyRef.current) return;
+    if (!user || !cloudReadyRef.current) return;
     const bundle = {
       version: 1,
       savedProfiles,
@@ -528,32 +595,21 @@ function App() {
       }
     }, 1500);
     return () => clearTimeout(syncTimerRef.current);
-  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents, user?.id]);
 
+  // Advanced: override the Supabase URL/key (most users never need this — the
+  // app ships pre-configured). Saving reloads so the auth client re-inits.
   const handleSyncConnect = async () => {
     const cfg = { url: syncForm.url.trim().replace(/\/+$/, ''), anonKey: syncForm.anonKey.trim() };
     if (!cfg.url || !cfg.anonKey) { setSyncError('Both Project URL and anon key are required.'); return; }
     setSyncConnecting(true);
     setSyncError('');
     try {
-      await testConnection(cfg);
-      setSyncConfig(cfg);
-      const row = await cloudLoad(cfg);
-      if (row && row.data) {
-        applyCloudBundle(row.data);
-        lastPushedJsonRef.current = canonicalBundleJson(row.data);
-      } else {
-        // Cloud empty: seed it with current local data
-        const bundle = {
-          version: 1, savedProfiles, savedPredictions, activeProfileId,
-          birthDetails, lifeEvents, savedAt: new Date().toISOString()
-        };
-        await cloudSave(bundle, cfg);
-        lastPushedJsonRef.current = canonicalBundleJson(bundle);
-      }
-      cloudReadyRef.current = true;
-      setSyncStatus('synced');
+      setSyncConfig(cfg);          // rebuilds the Supabase client
+      await testConnection();      // verify URL + key + table
       setShowSyncSettings(false);
+      window.location.reload();     // re-init auth/session against new config
     } catch (err) {
       console.error('Cloud sync connect error', err);
       setSyncStatus('error');
@@ -570,6 +626,7 @@ function App() {
     setSyncStatus('off');
     setSyncError('');
     setShowSyncSettings(false);
+    window.location.reload();
   };
 
   const handleLoadProfile = (prof) => {
@@ -666,8 +723,23 @@ function App() {
     try {
       const { parseKundliPDF } = await import('./pdfParser');
       const pdfData = await parseKundliPDF(file);
+
+      // Upload the raw PDF to the user's private Storage folder so the original
+      // report is saved (not just the parsed data). Non-fatal if it fails.
+      let pdfStoragePath = null, pdfSize = file.size;
+      if (user) {
+        try {
+          const up = await uploadReport(profileId, file);
+          pdfStoragePath = up.path;
+          pdfSize = up.size;
+        } catch (upErr) {
+          console.error('PDF storage upload failed', upErr);
+          setPdfParseError(`Parsed the report, but saving the original file failed: ${upErr.message}`);
+        }
+      }
+
       setSavedProfiles(prev => prev.map(p =>
-        p.id === profileId ? { ...p, pdfData, pdfFileName: file.name } : p
+        p.id === profileId ? { ...p, pdfData, pdfFileName: file.name, pdfStoragePath, pdfSize } : p
       ));
       // If this is the active profile, trigger chart recalc with PDF birth data if available
       if (profileId === activeProfileId && pdfData.birthDetails) {
@@ -691,6 +763,20 @@ function App() {
       setPdfParseError(`Could not parse PDF: ${err.message || 'Unknown error'}. Ensure this is an AstroSage Vedic Kundli report.`);
     } finally {
       setParsingPDFForProfile(null);
+    }
+  };
+
+  const [downloadingReport, setDownloadingReport] = useState(null); // profileId
+  const handleDownloadReport = async (prof) => {
+    if (!prof.pdfStoragePath) { alert('The original PDF for this profile is not stored in the cloud.'); return; }
+    setDownloadingReport(prof.id);
+    try {
+      const url = await getReportUrl(prof.pdfStoragePath);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      alert(`Could not open the report: ${err.message}`);
+    } finally {
+      setDownloadingReport(null);
     }
   };
 
@@ -1500,9 +1586,11 @@ function App() {
           </div>
           <div className="pm-form-section">
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 10px' }}>
-              Profiles, predictions, birth details and life events auto-save to your free
-              Supabase database and load automatically on startup — from any browser or device.
-              One-time setup instructions are in <strong>CLOUD_SYNC_SETUP.md</strong>.
+              The app is pre-configured — just <strong>Create Account / Sign In</strong>. Your profiles,
+              predictions, reports and charts are private to your account and sync across devices.
+              These fields are only for <strong>advanced</strong> use (pointing the app at a different
+              Supabase project). Saving reloads the app. One-time database setup is in
+              <strong> SUPABASE_AUTH_SETUP.md</strong>.
             </p>
             <div className="pm-section-label">Supabase Project URL</div>
             <input
@@ -1720,8 +1808,19 @@ function App() {
                               <span className="pm-pdf-acc-num">+{getAccuracyProfile(prof.pdfData).earned}%</span>
                             </div>
                           </div>
-                          <button className="pm-btn del" style={{ flexShrink: 0, alignSelf: 'flex-start' }} title="Remove PDF data"
-                            onClick={() => setSavedProfiles(prev => prev.map(p => p.id === prof.id ? { ...p, pdfData: null, pdfFileName: null } : p))}>✕</button>
+                          {prof.pdfStoragePath && (
+                            <button className="pm-pdf-download" title="Download the original PDF report"
+                              disabled={downloadingReport === prof.id}
+                              onClick={() => handleDownloadReport(prof)}>
+                              {downloadingReport === prof.id ? '…' : '⬇ PDF'}
+                            </button>
+                          )}
+                          <button className="pm-btn del" style={{ flexShrink: 0, alignSelf: 'flex-start' }} title="Remove PDF data & stored file"
+                            onClick={async () => {
+                              const path = prof.pdfStoragePath;
+                              setSavedProfiles(prev => prev.map(p => p.id === prof.id ? { ...p, pdfData: null, pdfFileName: null, pdfStoragePath: null } : p));
+                              if (path) { try { await deleteReport(path); } catch (e) { console.error('delete report', e); } }
+                            }}>✕</button>
                         </div>
                       ) : (
                         <label className={`pm-pdf-upload${parsingPDFForProfile === prof.id ? ' parsing' : ''}`}
@@ -1771,6 +1870,23 @@ function App() {
     );
   };
 
+  // ── Auth gate ───────────────────────────────────────────────────────────
+  // While the session is resolving, show a minimal splash. If configured and
+  // not signed in, show the register/login screen instead of the app.
+  if (authConfigured && session === undefined) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card" style={{ textAlign: 'center' }}>
+          <span className="auth-glyph">☉</span>
+          <p style={{ color: 'var(--text-muted)', marginTop: 12 }}>Loading…</p>
+        </div>
+      </div>
+    );
+  }
+  if (authConfigured && !user) {
+    return <AuthScreen />;
+  }
+
   return (
     <div className="app-container">
       {/* Profile Manager Modal */}
@@ -1812,6 +1928,24 @@ function App() {
             <button className="header-profile-btn" onClick={() => { setProfileForm({ name: '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' }); setEditingProfileId(null); setShowProfileManager(true); }}>
               ⊙ Profiles {savedProfiles.length > 0 && <span className="header-profile-count">{savedProfiles.length}</span>}
             </button>
+            {user && (
+              <div className="user-menu">
+                <button className="user-chip" onClick={() => setShowUserMenu(v => !v)} title={user.email}>
+                  <span className="user-avatar">{(user.email || '?').charAt(0).toUpperCase()}</span>
+                  <span className="user-email-short">{user.email}</span>
+                  <span aria-hidden>▾</span>
+                </button>
+                {showUserMenu && (
+                  <>
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 55 }} onClick={() => setShowUserMenu(false)} />
+                    <div className="user-pop">
+                      <div className="user-pop-email">Signed in as<br /><strong>{user.email}</strong></div>
+                      <button className="user-pop-signout" onClick={handleSignOut}>Sign Out</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -3697,3 +3831,4 @@ function App() {
 }
 
 export default App;
+// auth + per-user data isolation + private PDF storage (Supabase)

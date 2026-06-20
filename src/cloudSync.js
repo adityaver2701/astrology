@@ -1,139 +1,259 @@
-// ── Cloud Sync (Supabase) ────────────────────────────────────────────────
-// Lightweight fetch-based client against Supabase's PostgREST API.
-// No SDK dependency. Stores all app data as a single JSON row keyed by id.
+// ── Cloud Sync + Auth (Supabase) ─────────────────────────────────────────
+// Backed by @supabase/supabase-js (see ./supabaseClient.js).
 //
-// One-time setup (see CLOUD_SYNC_SETUP.md in project root):
-//   1. Create a free project at https://supabase.com
-//   2. Run the SQL in CLOUD_SYNC_SETUP.md to create the `astro_sync` table
-//   3. Paste the Project URL + anon key into the app's ☁ Cloud Sync settings
+// Three responsibilities:
+//   1. Auth  — email/password register, login, logout, session/state.
+//   2. Data  — each signed-in user owns ONE row in `astro_sync`, keyed by
+//              user_id = auth.uid(). Row Level Security guarantees a user can
+//              only ever read/write their own row, so no user can see another
+//              user's profiles.
+//   3. Files — raw PDF reports are uploaded to a PRIVATE Storage bucket
+//              (`vedic-reports`) under a per-user folder `<user_id>/...`.
+//              RLS on storage.objects restricts access to the owner.
 //
-// Config resolution order:
-//   1. localStorage  (set via the in-app Cloud Sync settings modal)
-//   2. Vite env vars (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in .env.local)
+// One-time database setup (run once in the Supabase SQL editor):
+//   see SUPABASE_AUTH_SETUP.md in the project root.
 
-const CONFIG_KEY = 'astro_sync_config';
-const ROW_ID = 'main';
+import {
+  getSupabase,
+  getSupabaseConfig,
+  setSupabaseConfig,
+  clearSupabaseConfig,
+  isSupabaseConfigured,
+} from './supabaseClient';
+
 const TABLE = 'astro_sync';
+const BUCKET = 'vedic-reports'; // private per-user storage bucket
 
-export function getSyncConfig() {
-  try {
-    const saved = localStorage.getItem(CONFIG_KEY);
-    if (saved) {
-      const cfg = JSON.parse(saved);
-      if (cfg && cfg.url && cfg.anonKey) return cfg;
-    }
-  } catch (e) {
-    console.error('cloudSync: bad config in localStorage', e);
-  }
-  const envUrl = import.meta.env.VITE_SUPABASE_URL;
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  if (envUrl && envKey) return { url: envUrl, anonKey: envKey };
-  return null;
-}
+// Re-export config helpers so existing imports keep working.
+export {
+  getSupabaseConfig as getSyncConfig,
+  setSupabaseConfig as setSyncConfig,
+  clearSupabaseConfig as clearSyncConfig,
+  isSupabaseConfigured,
+};
 
-export function setSyncConfig({ url, anonKey }) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify({
-    url: url.trim().replace(/\/+$/, ''),
-    anonKey: anonKey.trim()
-  }));
-}
+// ── Auth ──────────────────────────────────────────────────────────────────
 
-export function clearSyncConfig() {
-  localStorage.removeItem(CONFIG_KEY);
-}
-
-function headers(cfg, withBody = false) {
-  const h = {
-    apikey: cfg.anonKey,
-    Authorization: `Bearer ${cfg.anonKey}`
+/** Register a new account. Resolves with { user, session, needsConfirmation }. */
+export async function signUp(email, password) {
+  const sb = requireClient();
+  const { data, error } = await sb.auth.signUp({ email: email.trim(), password });
+  if (error) throw friendlyAuthError(error);
+  // When email confirmation is ON, session is null until the link is clicked.
+  return {
+    user: data.user,
+    session: data.session,
+    needsConfirmation: !!data.user && !data.session,
   };
-  // Only set Content-Type when actually sending a body. Adding it to GET
-  // requests forces an unnecessary CORS preflight (OPTIONS) round-trip.
-  if (withBody) h['Content-Type'] = 'application/json';
-  return h;
 }
 
-function hostOf(cfg) {
-  try {
-    return new URL(cfg.url).host;
-  } catch {
-    return cfg.url;
+/** Sign in with email + password. Resolves with { user, session }. */
+export async function signIn(email, password) {
+  const sb = requireClient();
+  const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+  if (error) throw friendlyAuthError(error);
+  return { user: data.user, session: data.session };
+}
+
+/** Sign the current user out. */
+export async function signOut() {
+  const sb = getSupabase();
+  if (!sb) return;
+  await sb.auth.signOut();
+}
+
+/** Resend the confirmation email for an unconfirmed signup. */
+export async function resendConfirmation(email) {
+  const sb = requireClient();
+  const { error } = await sb.auth.resend({ type: 'signup', email: email.trim() });
+  if (error) throw friendlyAuthError(error);
+}
+
+/** Get the current session (or null), reading from persisted storage. */
+export async function getSession() {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data } = await sb.auth.getSession();
+  return data.session || null;
+}
+
+/** Get the current user (or null). */
+export async function getCurrentUser() {
+  const session = await getSession();
+  return session?.user || null;
+}
+
+/**
+ * Subscribe to auth state changes (login/logout/token refresh).
+ * @param {(event: string, session: object|null) => void} cb
+ * @returns {() => void} unsubscribe
+ */
+export function onAuthChange(cb) {
+  const sb = getSupabase();
+  if (!sb) return () => {};
+  const { data } = sb.auth.onAuthStateChange((event, session) => cb(event, session));
+  return () => data.subscription.unsubscribe();
+}
+
+// ── Per-user data row ───────────────────────────────────────────────────────
+
+/**
+ * Load the signed-in user's data bundle.
+ * @returns {Promise<{data: object, updatedAt: string} | null>} null if none yet
+ */
+export async function cloudLoad() {
+  const sb = requireClient();
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not signed in');
+  const { data, error } = await wrapTimeout(
+    sb.from(TABLE)
+      .select('data, updated_at')
+      .eq('user_id', user.id)
+      .maybeSingle()
+  );
+  if (error) throw friendlyDataError(error);
+  if (!data) return null;
+  return { data: data.data, updatedAt: data.updated_at };
+}
+
+/**
+ * Upsert the signed-in user's data bundle (last-write-wins on their own row).
+ * @param {object} bundle full app data bundle
+ */
+export async function cloudSave(bundle) {
+  const sb = requireClient();
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not signed in');
+  const { error } = await wrapTimeout(
+    sb.from(TABLE).upsert(
+      { user_id: user.id, data: bundle, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
+  );
+  if (error) throw friendlyDataError(error);
+}
+
+/** Quick connectivity/credentials check for the settings modal. */
+export async function testConnection() {
+  const sb = requireClient();
+  // A HEAD count against the table verifies URL + key + table existence.
+  const { error } = await sb.from(TABLE).select('user_id', { count: 'exact', head: true });
+  if (error) {
+    if (error.code === '42P01') throw new Error('Table astro_sync not found — run the setup SQL first.');
+    if (/JWT|key|apikey|Invalid/i.test(error.message)) throw new Error('Invalid anon key (unauthorized).');
+    throw friendlyDataError(error);
   }
+  return true;
 }
 
-// Wraps fetch with a timeout and turns the opaque browser-level
-// "Failed to fetch" / "Load failed" / timeout into an actionable message.
-async function request(cfg, url, opts = {}, { timeoutMs = 15000 } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+// ── PDF report files (private Storage bucket) ──────────────────────────────
+
+/** Storage object path for a user's report. */
+function reportPath(userId, profileId, fileName) {
+  const safe = fileName.replace(/[^\w.-]+/g, '_');
+  return `${userId}/${profileId}-${Date.now()}-${safe}`;
+}
+
+/**
+ * Upload a raw PDF to the user's private folder.
+ * @returns {Promise<{path: string, name: string, size: number}>}
+ */
+export async function uploadReport(profileId, file) {
+  const sb = requireClient();
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not signed in');
+  const path = reportPath(user.id, profileId, file.name);
+  const { error } = await sb.storage.from(BUCKET).upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: file.type || 'application/pdf',
+  });
+  if (error) throw friendlyStorageError(error);
+  return { path, name: file.name, size: file.size };
+}
+
+/**
+ * Create a short-lived signed URL to download/view a stored report.
+ * @param {string} path storage object path returned by uploadReport
+ * @param {number} expiresIn seconds (default 5 min)
+ */
+export async function getReportUrl(path, expiresIn = 300) {
+  const sb = requireClient();
+  const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, expiresIn);
+  if (error) throw friendlyStorageError(error);
+  return data.signedUrl;
+}
+
+/** Delete a stored report (best-effort; ignores "not found"). */
+export async function deleteReport(path) {
+  if (!path) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  const { error } = await sb.storage.from(BUCKET).remove([path]);
+  if (error && !/not.*found/i.test(error.message)) throw friendlyStorageError(error);
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function requireClient() {
+  const sb = getSupabase();
+  if (!sb) throw new Error('Cloud sync not configured (missing Supabase URL / anon key).');
+  return sb;
+}
+
+// Adds a timeout so a paused free-tier project surfaces an actionable message
+// instead of hanging. PostgREST builders are thenable, so we race them.
+async function wrapTimeout(builder, timeoutMs = 15000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('__timeout__')), timeoutMs);
+  });
   try {
-    return await fetch(url, { ...opts, signal: controller.signal });
-  } catch (err) {
-    const host = hostOf(cfg);
-    if (err.name === 'AbortError') {
-      throw new Error(`Cloud sync timed out reaching ${host}. The Supabase project may be paused or your connection is slow. Open your Supabase dashboard and make sure the project is active.`, { cause: err });
-    }
-    // fetch() throws a TypeError ("Failed to fetch" / "Load failed" / "NetworkError")
-    // when the request never reached the server: paused project, DNS, offline, or CORS.
-    if (err instanceof TypeError) {
-      throw new Error(`Could not reach Supabase at ${host}. Most likely the free project was auto-paused after inactivity — open https://supabase.com/dashboard, select the project, and click "Restore"/"Resume". Also check your internet connection and that the Project URL is correct.`, { cause: err });
-    }
-    throw err;
+    return await Promise.race([builder, timeout]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * Load the synced data bundle from the cloud.
- * @returns {Promise<{data: object, updatedAt: string} | null>} null when no row exists yet
- * @throws on network/auth/config errors (caller shows sync error state)
- */
-export async function cloudLoad(cfg = getSyncConfig()) {
-  if (!cfg) throw new Error('Cloud sync not configured');
-  const res = await request(
-    cfg,
-    `${cfg.url}/rest/v1/${TABLE}?id=eq.${ROW_ID}&select=data,updated_at`,
-    { headers: headers(cfg) }
-  );
-  if (!res.ok) throw new Error(`Cloud load failed (HTTP ${res.status}): ${await safeText(res)}`);
-  const rows = await res.json();
-  if (!Array.isArray(rows) || rows.length === 0) return null;
-  return { data: rows[0].data, updatedAt: rows[0].updated_at };
-}
-
-/**
- * Upsert the data bundle to the cloud (last-write-wins).
- * @param {object} data - the full app data bundle
- */
-export async function cloudSave(data, cfg = getSyncConfig()) {
-  if (!cfg) throw new Error('Cloud sync not configured');
-  const res = await request(cfg, `${cfg.url}/rest/v1/${TABLE}`, {
-    method: 'POST',
-    headers: {
-      ...headers(cfg, true),
-      Prefer: 'resolution=merge-duplicates,return=minimal'
-    },
-    body: JSON.stringify([{ id: ROW_ID, data, updated_at: new Date().toISOString() }])
-  });
-  if (!res.ok) throw new Error(`Cloud save failed (HTTP ${res.status}): ${await safeText(res)}`);
-}
-
-/** Quick connectivity/credentials check used by the settings modal. */
-export async function testConnection(cfg) {
-  const res = await request(cfg, `${cfg.url}/rest/v1/${TABLE}?select=id&limit=1`, {
-    headers: headers(cfg)
-  });
-  if (res.status === 401 || res.status === 403) throw new Error('Invalid anon key (unauthorized).');
-  if (res.status === 404) throw new Error('Table `astro_sync` not found — run the setup SQL first.');
-  if (!res.ok) throw new Error(`Connection failed (HTTP ${res.status}): ${await safeText(res)}`);
-  return true;
-}
-
-async function safeText(res) {
-  try {
-    return (await res.text()).slice(0, 200);
-  } catch {
-    return '';
+function friendlyDataError(error) {
+  const msg = error?.message || String(error);
+  if (msg === '__timeout__' || /timeout/i.test(msg)) {
+    return new Error('Cloud sync timed out. The Supabase project may be paused — open your Supabase dashboard and make sure it is active.');
   }
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+    return new Error('Could not reach Supabase. The free project may have auto-paused after inactivity — open https://supabase.com/dashboard and resume it, then retry.');
+  }
+  return new Error(msg);
+}
+
+function friendlyStorageError(error) {
+  const msg = error?.message || String(error);
+  if (/Bucket not found/i.test(msg)) {
+    return new Error('Storage bucket vedic-reports not found — run the setup SQL (Storage section) first.');
+  }
+  if (/exceeded|too large|413/i.test(msg)) {
+    return new Error('That PDF is too large for the storage bucket limit. Try a smaller file or raise the bucket limit in Supabase.');
+  }
+  return new Error(msg);
+}
+
+function friendlyAuthError(error) {
+  const msg = error?.message || String(error);
+  if (/already registered|already been registered|User already/i.test(msg)) {
+    return new Error('An account with this email already exists. Try signing in instead.');
+  }
+  if (/Invalid login credentials/i.test(msg)) {
+    return new Error('Incorrect email or password.');
+  }
+  if (/Email not confirmed/i.test(msg)) {
+    return new Error('Please confirm your email first — check your inbox for the confirmation link.');
+  }
+  if (/Password should be at least/i.test(msg)) {
+    return new Error('Password is too short (minimum 6 characters).');
+  }
+  if (/rate limit|too many/i.test(msg)) {
+    return new Error('Too many attempts — please wait a minute and try again.');
+  }
+  return new Error(msg);
 }
