@@ -4,7 +4,12 @@
 // Everything else falls through to static assets (SPA fallback handled by the
 // assets binding's not_found_handling = "single-page-application").
 
-const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+// Tried in order; if one is deprecated/unavailable we fall through to the next.
+const AI_MODELS = [
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/meta/llama-3.1-8b-instruct-fast',
+  '@cf/mistralai/mistral-small-3.1-24b-instruct',
+];
 
 export default {
   async fetch(request, env) {
@@ -53,19 +58,25 @@ async function handleInterpret(request, env) {
     'given. Write 3-5 short paragraphs in clear language. Frame everything as tendencies and ' +
     'possibilities, never certainties. Do NOT give medical, legal, or financial advice.';
   const user = `Birth chart summary:\n${summary}\n\nTask: ${focusLine}`;
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
 
-  try {
-    const res = await env.AI.run(AI_MODEL, {
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      max_tokens: 900,
-    });
-    return json({ text: (res && res.response) || '' });
-  } catch (e) {
-    return json({ error: 'AI service error: ' + ((e && e.message) || 'unknown') }, 502);
+  let lastErr = 'unknown';
+  for (const model of AI_MODELS) {
+    try {
+      const res = await env.AI.run(model, { messages, max_tokens: 900 });
+      const text = (res && res.response) || '';
+      if (text) return json({ text, model });
+      lastErr = 'empty response from ' + model;
+    } catch (e) {
+      lastErr = (e && e.message) || 'unknown';
+      // Only fall through on availability/deprecation-type errors; otherwise stop.
+      if (!/deprecat|not found|no such model|unavailable|unsupported|50\d\d/i.test(lastErr)) break;
+    }
   }
+  return json({ error: 'AI service error: ' + lastErr }, 502);
 }
 
 function json(obj, status = 200) {
