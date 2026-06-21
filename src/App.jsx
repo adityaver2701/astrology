@@ -34,6 +34,7 @@ import AuthScreen from './AuthScreen';
 import AIReading from './AIReading';
 import GuideTour from './GuideTour';
 import AdminDashboard from './AdminDashboard';
+import { VARGAS, buildVargaChart } from './vargas';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
 // Orbital periods (days). Negative = retrograde (Rahu/Ketu).
@@ -841,6 +842,16 @@ function App() {
     return `${who}, born ${birthDetails.date} ${birthDetails.time} at ${birthDetails.placeName}.\n` +
       `Ascendant (Lagna): ${lagnaName}.\nPlanetary placements:\n- ${lines.join('\n- ')}${dashaStr}`;
   }, [natalChart, dashaData, birthDetails]);
+
+  // Divisional (varga) charts derived from the natal sidereal positions.
+  const vargaCharts = useMemo(() => {
+    if (!natalChart || !natalChart.planets) return [];
+    const asc = natalChart.lagnaSign * 30 + natalChart.lagnaDegree;
+    return VARGAS.filter(v => v.num !== 1).map(v => {
+      const c = buildVargaChart(natalChart.planets, asc, v.num);
+      return { id: v.id, label: v.label, planets: c.planets, lagnaSign: c.lagnaSign };
+    });
+  }, [natalChart]);
 
   const handleSaveCurrentPrediction = () => {
     if (!predictionResults) return;
@@ -2526,6 +2537,28 @@ function App() {
                   </p>
                 </div>
               </div>
+
+              {/* Divisional charts (Vargas) */}
+              {vargaCharts.length > 0 && (
+                <div className="varga-section glass-subcard">
+                  <h4 className="card-subtitle">Divisional Charts (Vargas)</h4>
+                  <p className="section-description">
+                    Harmonic sub-charts derived from your sidereal positions — each magnifies a
+                    specific area of life. Lagna and planets are re-mapped per the Parashari method.
+                  </p>
+                  <div className="varga-grid">
+                    {vargaCharts.map(v => (
+                      <div key={v.id} className="varga-cell">
+                        <div className="varga-cell-title">{v.label}</div>
+                        <div className="chart-svg-container varga-svg">
+                          {renderNorthIndianChart(v.planets, v.lagnaSign)}
+                        </div>
+                        <div className="varga-cell-sub">Lagna: <strong>{SIGNS[v.lagnaSign].name}</strong></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Slider for real-time transit scrubbing */}
               <div className="transit-slider-controls glass-subcard">
