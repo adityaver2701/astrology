@@ -32,6 +32,7 @@ import {
 } from './cloudSync';
 import AuthScreen from './AuthScreen';
 import AIReading from './AIReading';
+import GuideTour from './GuideTour';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
 // Orbital periods (days). Negative = retrograde (Rahu/Ketu).
@@ -505,6 +506,30 @@ function App() {
     resetLocalData();
     setSyncStatus('off');
   }, [resetLocalData]);
+
+  // ── First-run guided tour ──────────────────────────────────────────────
+  const [showGuide, setShowGuide] = useState(false);
+  const guideKey = user ? `astro_guide_seen_${user.id}` : null;
+
+  // Auto-open the guide the first time each user signs in.
+  useEffect(() => {
+    if (!user || !guideKey) return;
+    if (!localStorage.getItem(guideKey)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShowGuide(true);
+    }
+  }, [user, guideKey]);
+
+  const markGuideSeen = useCallback(() => {
+    if (guideKey) localStorage.setItem(guideKey, '1');
+  }, [guideKey]);
+
+  const closeGuide = useCallback(() => { markGuideSeen(); setShowGuide(false); }, [markGuideSeen]);
+  const finishGuide = useCallback(() => {
+    markGuideSeen();
+    setShowGuide(false);
+    setBirthFormCollapsed(false); // open the Birth & Location Profile so they can start
+  }, [markGuideSeen]);
 
   // Fixed-key-order serialization for change detection (jsonb reorders keys)
   const canonicalBundleJson = (d) => JSON.stringify({
@@ -1892,6 +1917,11 @@ function App() {
       {/* Cloud Sync Settings Modal */}
       {renderSyncSettingsModal()}
 
+      {/* First-run guided tour */}
+      {showGuide && (
+        <GuideTour tabs={TABS} isAdmin={isAdmin} onClose={closeGuide} onFinish={finishGuide} />
+      )}
+
       {/* Header Banner */}
       <header className="app-header">
         <div className="header-inner">
@@ -1900,6 +1930,12 @@ function App() {
             <p className="header-subtitle">Vedic Jyotish & Karmic Trik Bhava Analytics Engine</p>
           </div>
           <div className="header-actions">
+            <button
+              className="header-help-btn"
+              onClick={() => setShowGuide(true)}
+              title="Open the guided tour"
+              aria-label="Help and guided tour"
+            >?</button>
             <button
               className="theme-toggle"
               onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}

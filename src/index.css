@@ -2783,3 +2783,71 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .ai-result { margin-top: 12px; }
 .ai-result p { font-size: 14px; line-height: 1.6; color: var(--text-primary); margin: 0 0 10px; }
 .ai-disclaimer { font-size: 11px !important; color: var(--text-faint) !important; font-style: italic; border-top: 1px solid var(--border-gold); padding-top: 8px; }
+
+/* ── First-run guided tour ────────────────────────────────────────────── */
+.guide-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(20, 12, 2, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.guide-card {
+  position: relative;
+  width: 100%; max-width: 460px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-gold-md);
+  border-radius: 18px;
+  box-shadow: var(--shadow-deep);
+  padding: 26px 26px 18px;
+}
+.guide-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 30px; height: 30px; border-radius: 8px;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 16px; cursor: pointer;
+}
+.guide-close:hover { background: var(--bg-subcard); color: var(--text-primary); }
+.guide-icon {
+  font-size: 40px; line-height: 1; text-align: center;
+  color: var(--gold-bright); margin-bottom: 8px;
+  text-shadow: 0 0 16px rgba(202,138,4,0.4);
+}
+.guide-title {
+  font-family: 'Cinzel', serif; font-size: 21px; text-align: center;
+  color: var(--text-bright); margin: 0 0 14px;
+}
+.guide-body { min-height: 150px; }
+.guide-body p { font-size: 14px; line-height: 1.6; color: var(--text-primary); margin: 0 0 10px; }
+.guide-body strong { color: var(--text-bright); }
+.guide-tip { font-size: 12px !important; color: var(--text-muted) !important; }
+.guide-body kbd {
+  background: var(--bg-subcard); border: 1px solid var(--border-gold-md);
+  border-radius: 5px; padding: 1px 6px; font-size: 11px; font-family: monospace;
+}
+.guide-dots { display: flex; justify-content: center; gap: 7px; margin: 14px 0; }
+.guide-dot {
+  width: 8px; height: 8px; border-radius: 50%; padding: 0;
+  border: none; background: var(--border-gold-md); cursor: pointer; transition: all 0.15s;
+}
+.guide-dot.active { background: var(--gold-bright); transform: scale(1.3); }
+.guide-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.guide-skip {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 13px; cursor: pointer; padding: 6px;
+}
+.guide-skip:hover { color: var(--text-primary); text-decoration: underline; }
+.guide-nav { display: flex; gap: 8px; }
+.guide-btn { font-size: 13px; padding: 8px 16px; }
+.guide-step-count {
+  text-align: center; font-size: 11px; color: var(--text-faint); margin-top: 10px;
+}
+
+/* Header help button */
+.header-help-btn {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 1px solid var(--border-gold-md); background: var(--bg-subcard);
+  color: var(--gold-mid); font-size: 16px; font-weight: 700; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.header-help-btn:hover { border-color: var(--border-gold-hi); background: var(--cream); }
