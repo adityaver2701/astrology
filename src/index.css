@@ -2734,3 +2734,26 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 }
 .pm-pdf-download:hover { border-color: var(--border-gold-hi); background: var(--bg-subcard); }
 .pm-pdf-download:disabled { opacity: 0.55; cursor: default; }
+
+/* ── Password show/hide eye toggle ────────────────────────────────────── */
+.auth-pw-wrap { position: relative; display: flex; align-items: center; }
+.auth-pw-input { width: 100%; padding-right: 40px !important; }
+.auth-pw-eye {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.auth-pw-eye:hover { color: var(--gold-mid); background: var(--bg-subcard); }
+.auth-pw-eye:focus-visible { outline: 2px solid var(--border-gold-hi); outline-offset: 1px; }

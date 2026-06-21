@@ -71,6 +71,11 @@ const DEFAULT_BIRTH = {
   timezone: 5.5,
 };
 
+// Accounts that may see admin-only settings (Cloud Sync configuration).
+// Configurable via VITE_ADMIN_EMAILS (comma-separated); defaults to the owner.
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || 'penetacle@gmail.com')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+
 // Planet long name helper
 const PLANET_NAMES = {
   sun: 'Sun (Surya)',
@@ -456,6 +461,7 @@ function App() {
   const [session, setSession] = useState(() => (authConfigured ? undefined : null));
   const [showUserMenu, setShowUserMenu] = useState(false);
   const user = session?.user || null;
+  const isAdmin = !!user && ADMIN_EMAILS.includes((user.email || '').toLowerCase());
 
   // Initialise session from persisted storage and subscribe to changes.
   useEffect(() => {
@@ -886,40 +892,8 @@ function App() {
     handleGenerateNatal();
   }, [handleGenerateNatal]);
 
-  // Auto-import workspace CSV on first ever load (runs once, flag stored in localStorage)
-  useEffect(() => {
-    const alreadyLoaded = localStorage.getItem('astro_csv_autoloaded');
-    if (alreadyLoaded) return;
-    fetch('/life_events_timeline.csv')
-      .then(r => r.ok ? r.text() : Promise.reject())
-      .then(text => {
-        const rows = parseCSV(text);
-        if (rows.length < 2) return;
-        const headers = rows[0].map(h => h.trim().toLowerCase());
-        const yearIdx = headers.indexOf('year');
-        const titleIdx = headers.indexOf('event title') !== -1 ? headers.indexOf('event title') : headers.indexOf('title');
-        const descIdx = headers.indexOf('description') !== -1 ? headers.indexOf('description') : headers.indexOf('desc');
-        if (yearIdx === -1 || titleIdx === -1) return;
-        const imported = [];
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (row.length < 2 || !row[yearIdx]) continue;
-          const yearStr = row[yearIdx].trim();
-          const titleStr = row[titleIdx] ? row[titleIdx].trim() : 'Unnamed Event';
-          const descStr = descIdx !== -1 && row[descIdx] ? row[descIdx].trim() : '';
-          const { startDate, endDate } = parseEventDates(yearStr);
-          const category = classifyCategory(titleStr, descStr);
-          let finalName = titleStr;
-          if (descStr) finalName += ` (${descStr.substring(0, 45)}${descStr.length > 45 ? '...' : ''})`;
-          imported.push({ id: i, name: finalName, startDate, endDate, category });
-        }
-        if (imported.length > 0) {
-          setLifeEvents(imported);
-          localStorage.setItem('astro_csv_autoloaded', '1');
-        }
-      })
-      .catch(() => {});
-  }, []);
+  // (Removed) CSV auto-load: life events are now per-user only; the previous
+  // auto-import seeded every session with the project owner's timeline.
 
   // Derive Transit Chart whenever Transit Date/Time changes
   const transitChart = useMemo(() => {
@@ -1911,6 +1885,7 @@ function App() {
               <span className="tt-icon">{theme === 'dark' ? '☀' : '☾'}</span>
               {theme === 'dark' ? 'Day' : 'Night'}
             </button>
+{isAdmin && (
             <button
               className="theme-toggle"
               onClick={() => setShowSyncSettings(true)}
@@ -1925,6 +1900,7 @@ function App() {
               <span className={`sync-dot sync-${syncStatus}`} />
               ☁ {syncStatus === 'off' ? 'Sync' : syncStatus === 'error' ? 'Error' : syncStatus === 'synced' ? 'Synced' : '…'}
             </button>
+            )}
             <button className="header-profile-btn" onClick={() => { setProfileForm({ name: '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' }); setEditingProfileId(null); setShowProfileManager(true); }}>
               ⊙ Profiles {savedProfiles.length > 0 && <span className="header-profile-count">{savedProfiles.length}</span>}
             </button>
@@ -3036,11 +3012,13 @@ function App() {
                   </div>
                 </div>
 
-                <div className="csv-actions-row">
-                  <button onClick={handleLoadWorkspaceCSV} className="btn btn-secondary">
-                    Load Workspace CSV Timeline
-                  </button>
-                </div>
+                {isAdmin && (
+                  <div className="csv-actions-row">
+                    <button onClick={handleLoadWorkspaceCSV} className="btn btn-secondary">
+                      Load Workspace CSV Timeline
+                    </button>
+                  </div>
+                )}
 
                 {csvError && <p className="error-message csv-error">{csvError}</p>}
               </div>
