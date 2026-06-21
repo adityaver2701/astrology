@@ -512,6 +512,7 @@ function App() {
   // ── First-run guided tour ──────────────────────────────────────────────
   const [showGuide, setShowGuide] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [zoomId, setZoomId] = useState(null); // id of chart shown enlarged
   const guideKey = user ? `astro_guide_seen_${user.id}` : null;
 
   // Auto-open the guide the first time each user signs in.
@@ -964,6 +965,26 @@ function App() {
     // We evaluate transits at the same latitude/longitude to align relative house structures
     return calculatePlanets(jd);
   }, [transitDateInput, transitTimeInput, natalChart]);
+
+  // Ordered list of every chart, used by the enlarge/zoom modal (with prev/next).
+  const allCharts = useMemo(() => {
+    if (!natalChart || !natalChart.planets) return [];
+    const list = [{
+      id: 'natal', title: 'Lagna / Birth Chart (D1)',
+      subtitle: `Lagna: ${SIGNS[natalChart.lagnaSign].name}`,
+      planets: natalChart.planets, lagnaSign: natalChart.lagnaSign,
+    }];
+    if (transitChart) list.push({
+      id: 'transit', title: 'Transit Chart',
+      subtitle: `${transitDateInput} ${transitTimeInput} UTC`,
+      planets: transitChart.planets, lagnaSign: natalChart.lagnaSign,
+    });
+    vargaCharts.forEach(v => list.push({
+      id: v.id, title: v.label, subtitle: `Lagna: ${SIGNS[v.lagnaSign].name}`,
+      planets: v.planets, lagnaSign: v.lagnaSign,
+    }));
+    return list;
+  }, [natalChart, transitChart, vargaCharts, transitDateInput, transitTimeInput]);
 
   // CSV file reading and parsing handler
   const handleCSVData = (text) => {
@@ -1922,6 +1943,17 @@ function App() {
     return <AuthScreen />;
   }
 
+  // Small magnifier button overlaid on each chart; opens the enlarge modal.
+  const zoomBtn = (id) => (
+    <button type="button" className="chart-zoom-btn" title="Enlarge chart" aria-label="Enlarge chart"
+      onClick={() => setZoomId(id)}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+        <line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" />
+      </svg>
+    </button>
+  );
+
   return (
     <div className="app-container">
       {/* Profile Manager Modal */}
@@ -1939,6 +1971,34 @@ function App() {
       {showAdmin && isAdmin && (
         <AdminDashboard onClose={() => setShowAdmin(false)} />
       )}
+
+      {/* Enlarged chart viewer with prev/next across all charts */}
+      {(() => {
+        if (!zoomId) return null;
+        const idx = allCharts.findIndex(c => c.id === zoomId);
+        if (idx < 0) return null;
+        const cur = allCharts[idx];
+        return (
+          <div className="chart-zoom-overlay" onClick={() => setZoomId(null)}>
+            <div className="chart-zoom-modal" onClick={e => e.stopPropagation()}>
+              <div className="chart-zoom-head">
+                <h3 className="chart-zoom-title">{cur.title}</h3>
+                <button className="pm-close" onClick={() => setZoomId(null)} aria-label="Close">✕</button>
+              </div>
+              <div className="chart-zoom-body">
+                <button className="chart-zoom-nav" disabled={idx <= 0}
+                  onClick={() => setZoomId(allCharts[idx - 1].id)} aria-label="Previous chart">‹</button>
+                <div className="chart-zoom-svg">
+                  {renderNorthIndianChart(cur.planets, cur.lagnaSign)}
+                </div>
+                <button className="chart-zoom-nav" disabled={idx >= allCharts.length - 1}
+                  onClick={() => setZoomId(allCharts[idx + 1].id)} aria-label="Next chart">›</button>
+              </div>
+              <p className="chart-zoom-sub">{cur.subtitle} · {idx + 1} / {allCharts.length}</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Header Banner */}
       <header className="app-header">
@@ -2513,6 +2573,7 @@ function App() {
                 <div className="chart-column">
                   <h4 className="chart-column-title">Lagna / Birth Chart</h4>
                   <div className="chart-svg-container">
+                    {zoomBtn('natal')}
                     {renderNorthIndianChart(natalChart.planets, natalChart.lagnaSign)}
                   </div>
                   <p className="chart-description">
@@ -2524,6 +2585,7 @@ function App() {
                 <div className="chart-column">
                   <h4 className="chart-column-title font-purple">Transit Chart</h4>
                   <div className="chart-svg-container">
+                    {transitChart && zoomBtn('transit')}
                     {transitChart && renderNorthIndianChart(transitChart.planets, natalChart.lagnaSign, true)}
                   </div>
                   <p className="chart-description" style={{ minHeight: '2.8em' }}>
@@ -2551,6 +2613,7 @@ function App() {
                       <div key={v.id} className="varga-cell">
                         <div className="varga-cell-title">{v.label}</div>
                         <div className="chart-svg-container varga-svg">
+                          {zoomBtn(v.id)}
                           {renderNorthIndianChart(v.planets, v.lagnaSign)}
                         </div>
                         <div className="varga-cell-sub">Lagna: <strong>{SIGNS[v.lagnaSign].name}</strong></div>

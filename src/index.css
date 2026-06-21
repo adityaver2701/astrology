@@ -2906,3 +2906,45 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .varga-cell-title { font-size: 12px; font-weight: 700; color: var(--text-bright); margin-bottom: 6px; }
 .varga-svg { max-width: 220px; margin: 0 auto; }
 .varga-cell-sub { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+/* ── Chart enlarge / zoom ─────────────────────────────────────────────── */
+.chart-svg-container { position: relative; }
+.chart-zoom-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 3;
+  width: 30px; height: 30px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255, 252, 242, 0.9);
+  border: 1px solid var(--border-gold-md);
+  color: var(--gold-mid); cursor: pointer;
+  box-shadow: 0 1px 4px rgba(146,64,14,0.12);
+}
+.chart-zoom-btn:hover { background: var(--cream); border-color: var(--border-gold-hi); }
+
+.chart-zoom-overlay {
+  position: fixed; inset: 0; z-index: 210;
+  background: rgba(20, 12, 2, 0.6); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.chart-zoom-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-gold-md);
+  border-radius: 16px; box-shadow: var(--shadow-deep);
+  padding: 16px 18px; width: 100%; max-width: 640px;
+}
+.chart-zoom-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.chart-zoom-title { font-family: 'Cinzel', serif; font-size: 18px; margin: 0; color: var(--text-bright); }
+.chart-zoom-body { display: flex; align-items: center; gap: 8px; }
+.chart-zoom-svg {
+  flex: 1; max-width: 540px; margin: 0 auto;
+  background: var(--chart-paper); border-radius: 10px;
+  border: 1.5px solid #e8d5a0; padding: 8px;
+}
+.chart-zoom-nav {
+  flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--border-gold-md); background: var(--bg-subcard);
+  color: var(--gold-mid); font-size: 26px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.chart-zoom-nav:hover:not(:disabled) { background: var(--cream); border-color: var(--border-gold-hi); }
+.chart-zoom-nav:disabled { opacity: 0.3; cursor: default; }
+.chart-zoom-sub { text-align: center; font-size: 12px; color: var(--text-muted); margin: 10px 0 2px; }
