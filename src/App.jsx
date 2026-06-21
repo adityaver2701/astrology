@@ -31,6 +31,7 @@ import {
   uploadReport, getReportUrl, deleteReport,
 } from './cloudSync';
 import AuthScreen from './AuthScreen';
+import AIReading from './AIReading';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
 // Orbital periods (days). Negative = retrograde (Rahu/Ketu).
@@ -791,6 +792,28 @@ function App() {
     const ap = savedProfiles.find(p => p.id === activeProfileId);
     return ap?.pdfData || null;
   }, [savedProfiles, activeProfileId]);
+
+  // Compact natural-language chart summary fed to the AI reading endpoint.
+  const chartSummary = useMemo(() => {
+    if (!natalChart || !natalChart.planets) return '';
+    const lagnaName = SIGNS[natalChart.lagnaSign]?.name || '?';
+    const lines = Object.keys(natalChart.planets).map(k => {
+      const p = natalChart.planets[k];
+      const house = ((p.signIndex - natalChart.lagnaSign + 12) % 12) + 1;
+      return `${PLANET_NAMES[p.id] || p.id}: ${p.signName} (house ${house}), ${p.nakshatraName} nakshatra pada ${p.pada}${p.retrograde ? ', retrograde' : ''}`;
+    });
+    let dashaStr = '';
+    if (dashaData) {
+      const cur = getCurrentDasha(dashaData, new Date()) || {};
+      if (cur.currentMahadasha) {
+        dashaStr = `\nCurrent Vimshottari Dasha: ${cur.currentMahadasha.lord} Mahadasha` +
+          (cur.currentAntardasha ? ` / ${cur.currentAntardasha.lord} Antardasha` : '') + '.';
+      }
+    }
+    const who = birthDetails.name ? birthDetails.name : 'The native';
+    return `${who}, born ${birthDetails.date} ${birthDetails.time} at ${birthDetails.placeName}.\n` +
+      `Ascendant (Lagna): ${lagnaName}.\nPlanetary placements:\n- ${lines.join('\n- ')}${dashaStr}`;
+  }, [natalChart, dashaData, birthDetails]);
 
   const handleSaveCurrentPrediction = () => {
     if (!predictionResults) return;
@@ -2325,6 +2348,9 @@ function App() {
                   </tbody>
                 </table>
               </div>
+
+              {/* ✨ AI Reading (Cloudflare Workers AI) */}
+              <AIReading summary={chartSummary} disabled={!chartSummary} />
 
               {/* Trik Bhava Commentary and Yogas Section */}
               {trikBhavaAnalysis && (

@@ -1,14 +1,18 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "astrology",
+  "main": "worker/index.js",
   "compatibility_date": "2026-06-20",
-  "observability": {
-    "enabled": true
-  },
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
   "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
+  "ai": { "binding": "AI" },
+  "vars": {
+    "SUPABASE_URL": "https://chpexdmbwbtdyqzfvmow.supabase.co",
+    "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocGV4ZG1id2J0ZHlxemZ2bW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNzgzNTgsImV4cCI6MjA5Njg1NDM1OH0.1h3Q8R6CXi2PQmjfU41ERADVemfEkHkhhvI5axv746g"
+  }
 }
