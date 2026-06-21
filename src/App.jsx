@@ -33,6 +33,7 @@ import {
 import AuthScreen from './AuthScreen';
 import AIReading from './AIReading';
 import GuideTour from './GuideTour';
+import AdminDashboard from './AdminDashboard';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
 // Orbital periods (days). Negative = retrograde (Rahu/Ketu).
@@ -509,6 +510,7 @@ function App() {
 
   // ── First-run guided tour ──────────────────────────────────────────────
   const [showGuide, setShowGuide] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const guideKey = user ? `astro_guide_seen_${user.id}` : null;
 
   // Auto-open the guide the first time each user signs in.
@@ -1922,6 +1924,11 @@ function App() {
         <GuideTour tabs={TABS} isAdmin={isAdmin} onClose={closeGuide} onFinish={finishGuide} />
       )}
 
+      {/* Admin dashboard (admin accounts only) */}
+      {showAdmin && isAdmin && (
+        <AdminDashboard onClose={() => setShowAdmin(false)} />
+      )}
+
       {/* Header Banner */}
       <header className="app-header">
         <div className="header-inner">
@@ -1936,6 +1943,13 @@ function App() {
               title="Open the guided tour"
               aria-label="Help and guided tour"
             >?</button>
+            {isAdmin && (
+              <button
+                className="theme-toggle"
+                onClick={() => setShowAdmin(true)}
+                title="Admin dashboard — users & profiles"
+              >🛡 Admin</button>
+            )}
             <button
               className="theme-toggle"
               onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}

@@ -135,11 +135,26 @@ export async function cloudSave(bundle) {
   if (!user) throw new Error('Not signed in');
   const { error } = await wrapTimeout(
     sb.from(TABLE).upsert(
-      { user_id: user.id, data: bundle, updated_at: new Date().toISOString() },
+      { user_id: user.id, data: { ...bundle, ownerEmail: user.email }, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
     )
   );
   if (error) throw friendlyDataError(error);
+}
+
+/**
+ * Admin-only: list every user's data row. For non-admins, RLS returns only
+ * their own row, so this is safe to call regardless — the privilege is enforced
+ * by the "astro_sync admin read" policy in the database (see SUPABASE_AUTH_SETUP.md).
+ * @returns {Promise<Array<{user_id: string, data: object, updated_at: string}>>}
+ */
+export async function adminListAllData() {
+  const sb = requireClient();
+  const { data, error } = await wrapTimeout(
+    sb.from(TABLE).select('user_id, data, updated_at').order('updated_at', { ascending: false })
+  );
+  if (error) throw friendlyDataError(error);
+  return data || [];
 }
 
 /** Quick connectivity/credentials check for the settings modal. */

@@ -2851,3 +2851,39 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .header-help-btn:hover { border-color: var(--border-gold-hi); background: var(--cream); }
+
+/* ── Admin dashboard ──────────────────────────────────────────────────── */
+.admin-panel { max-width: 620px; }
+.admin-muted { color: var(--text-muted); font-size: 13px; text-align: center; padding: 16px 0; }
+.admin-muted.small { padding: 6px 0; }
+.admin-error {
+  color: var(--red); font-size: 13px; background: rgba(220,38,38,0.08);
+  border: 1px solid rgba(220,38,38,0.25); border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+}
+.admin-stats { display: flex; gap: 10px; margin: 6px 0 16px; }
+.admin-stat {
+  flex: 1; text-align: center; background: var(--bg-subcard);
+  border: 1px solid var(--border-gold); border-radius: 12px; padding: 12px 8px;
+}
+.admin-stat-num { display: block; font-size: 26px; font-weight: 700; color: var(--gold-bright); font-family: 'Cinzel', serif; }
+.admin-stat-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.admin-user-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-user { border: 1px solid var(--border-gold); border-radius: 10px; overflow: hidden; }
+.admin-user-head {
+  width: 100%; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px;
+  background: var(--bg-subcard); border: none; cursor: pointer; padding: 10px 12px; text-align: left;
+}
+.admin-user-head:hover { background: var(--cream); }
+.admin-user-email { font-weight: 600; font-size: 13px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; }
+.admin-user-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.admin-caret { color: var(--text-faint); font-size: 11px; }
+.admin-profiles { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.admin-profile { border-left: 3px solid var(--border-gold-md); padding: 4px 0 4px 10px; }
+.admin-profile-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.admin-badge {
+  font-size: 9px; font-weight: 700; background: var(--violet-soft); color: var(--violet);
+  padding: 1px 5px; border-radius: 5px; margin-left: 6px; vertical-align: middle;
+}
+.admin-profile-detail { font-size: 12px; color: var(--text-primary); }
+.admin-profile-sub { font-size: 11px; color: var(--text-muted); }
+.admin-foot { font-size: 11px; color: var(--text-faint); text-align: center; margin-top: 14px; }

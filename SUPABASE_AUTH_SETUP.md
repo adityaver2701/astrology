@@ -39,6 +39,13 @@ create policy "astro_sync own update" on public.astro_sync
 create policy "astro_sync own delete" on public.astro_sync
   for delete using (auth.uid() = user_id);
 
+-- Admin read-all: lets the admin account SELECT every user's row (for the
+-- in-app Admin dashboard). Normal users are unaffected — multiple SELECT
+-- policies are OR'd. Change/extend the email list to match your admins
+-- (must match VITE_ADMIN_EMAILS in the app).
+create policy "astro_sync admin read" on public.astro_sync
+  for select using ( (auth.jwt() ->> 'email') in ('penetacle@gmail.com') );
+
 -- ─────────────────────────────────────────────────────────────
 -- 2. Private Storage bucket for the original PDF reports
 --    Files live under  <user_id>/<filename>  so the folder name
@@ -87,13 +94,4 @@ just **Create Account → Sign In**. No keys to paste.
   RLS policies with `auth.uid()` = that user's id, so queries can only ever match
   their own `astro_sync` row and their own `vedic-reports/<user_id>/...` files.
 - The browser cache (localStorage) is wiped on **Sign Out**, so nothing leaks to
-  the next person on a shared computer. The database policies are the real
-  guarantee; the cache wipe is belt-and-suspenders.
-
-## Saving your `VedicReport...pdf`
-
-1. Sign in.
-2. Open **⊙ Profiles**, create a profile (e.g. your name + birth details).
-3. In that profile's card, drop or click-to-upload the PDF. The app parses it
-   **and** uploads the original to your private bucket. A **⬇ PDF** button then
-   lets you re-download the original any time, from any device.
+  the next person on a shared computer. The database policies are the re
