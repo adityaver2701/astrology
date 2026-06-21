@@ -1987,7 +1987,6 @@ function App() {
                 setShowProfileManager(true);
               }}
             >+ Save Current</button>
-            <button className="pba-btn secondary" onClick={() => { setEditingProfileId(null); setShowProfileManager(true); }}>⚙ Manage</button>
           </div>
         </div>
       </div>
@@ -2141,14 +2140,6 @@ function App() {
                 </div>
               );
             })()}
-            <button
-              type="button"
-              className="btn btn-secondary full-width"
-              style={{ marginTop: '8px', fontSize: '12px' }}
-              onClick={() => { setProfileForm({ name: birthDetails.name || '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' }); setEditingProfileId(null); setShowProfileManager(true); }}
-            >
-              ⊙ Open Profile Manager ({savedProfiles.length} saved)
-            </button>
           </div>
 
           <button onClick={handleGenerateNatal} className="btn btn-secondary full-width margin-top">
