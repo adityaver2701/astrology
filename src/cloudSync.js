@@ -38,7 +38,15 @@ export {
 /** Register a new account. Resolves with { user, session, needsConfirmation }. */
 export async function signUp(email, password) {
   const sb = requireClient();
-  const { data, error } = await sb.auth.signUp({ email: email.trim(), password });
+  // Point the confirmation email back at wherever the app is actually served
+  // (prod or localhost) instead of Supabase's default Site URL. The origin must
+  // also be listed under Auth → URL Configuration → Redirect URLs in Supabase.
+  const emailRedirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+  const { data, error } = await sb.auth.signUp({
+    email: email.trim(),
+    password,
+    ...(emailRedirectTo ? { options: { emailRedirectTo } } : {}),
+  });
   if (error) throw friendlyAuthError(error);
   // When email confirmation is ON, session is null until the link is clicked.
   return {
