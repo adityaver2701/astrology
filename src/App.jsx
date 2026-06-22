@@ -954,6 +954,40 @@ function App() {
     handleGenerateNatal();
   }, [handleGenerateNatal]);
 
+  // One-click: prepare the chart and create-or-update + sync a profile for it.
+  const [prepareFlash, setPrepareFlash] = useState('');
+  const handlePrepareAndSave = useCallback(() => {
+    handleGenerateNatal(); // ensure the chart reflects the latest inputs
+    const name = (birthDetails.name || '').trim();
+    if (!name) { setPrepareFlash('name-required'); return; }
+    const key = `${name}|${birthDetails.date}`;
+    const existing = savedProfiles.find(p => `${p.profileName}|${p.birthDetails?.date}` === key);
+    if (existing) {
+      setSavedProfiles(prev => prev.map(p => p.id === existing.id
+        ? { ...p, birthDetails: { ...birthDetails }, lifeEvents: [...lifeEvents] }
+        : p));
+      setActiveProfileId(existing.id);
+      localStorage.setItem('astro_active_profile_id', String(existing.id));
+      setPrepareFlash('updated');
+    } else {
+      const newProfile = {
+        id: Date.now(),
+        profileName: name,
+        color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length],
+        birthDetails: { ...birthDetails },
+        lifeEvents: [...lifeEvents],
+        createdAt: new Date().toISOString(),
+        notes: '',
+      };
+      setSavedProfiles(prev => [...prev, newProfile]);
+      setActiveProfileId(newProfile.id);
+      localStorage.setItem('astro_active_profile_id', String(newProfile.id));
+      setPrepareFlash('saved');
+    }
+    // The savedProfiles change triggers the debounced cloud auto-save effect.
+    setTimeout(() => setPrepareFlash(''), 4000);
+  }, [handleGenerateNatal, birthDetails, lifeEvents, savedProfiles]);
+
   // (Removed) CSV auto-load: life events are now per-user only; the previous
   // auto-import seeded every session with the project owner's timeline.
 
@@ -2263,9 +2297,18 @@ function App() {
             })()}
           </div>
 
-          <button onClick={handleGenerateNatal} className="btn btn-secondary full-width margin-top">
-            Recalculate Birth Chart
+          <button onClick={handlePrepareAndSave} className="btn btn-primary full-width margin-top prepare-save-btn">
+            ✦ Prepare Chart &amp; Save Profile
           </button>
+          {prepareFlash === 'name-required' && (
+            <p className="prepare-flash err">⚠ Enter a Name above so this can be saved as a profile.</p>
+          )}
+          {prepareFlash === 'saved' && (
+            <p className="prepare-flash ok">✓ Chart ready — profile created &amp; synced to your account.</p>
+          )}
+          {prepareFlash === 'updated' && (
+            <p className="prepare-flash ok">✓ Chart ready — existing profile updated &amp; synced.</p>
+          )}
 
           {/* Persistence status strip */}
           <div className="persistence-strip">

@@ -2948,3 +2948,12 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .chart-zoom-nav:hover:not(:disabled) { background: var(--cream); border-color: var(--border-gold-hi); }
 .chart-zoom-nav:disabled { opacity: 0.3; cursor: default; }
 .chart-zoom-sub { text-align: center; font-size: 12px; color: var(--text-muted); margin: 10px 0 2px; }
+
+/* ── Prepare Chart & Save Profile ─────────────────────────────────────── */
+.prepare-save-btn { font-size: 14px; font-weight: 700; padding: 12px; }
+.prepare-flash {
+  font-size: 12px; text-align: center; margin: 8px 0 0;
+  padding: 8px 10px; border-radius: 8px; line-height: 1.4;
+}
+.prepare-flash.ok { color: var(--green); background: rgba(22,163,74,0.10); border: 1px solid rgba(22,163,74,0.25); }
+.prepare-flash.err { color: var(--red); background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.25); }
