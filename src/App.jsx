@@ -1,300 +1,48 @@
-import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import {
   calculatePlanets,
   calculateAscendantLongitude,
   getJulianDate,
-  getHouseFromLagna,
   scanPlanetTransits,
   matchLifeEventTransits,
   predictFutureReoccurrences,
   analyzeTrikBhavaNatal,
   SIGNS,
-  NAKSHATRAS,
   scanDegreeAlignments,
-  analyzePeakDateAlignments,
   calculateVimshottariDasha,
   getCurrentDasha,
-  DASHA_YEARS,
-  getPlanetDignity,
-  enhanceTransitWithPDFData,
-  getAccuracyProfile,
-  binduLabel,
-  getActivePratyantar,
-  getActiveSadesati,
-  shadbalLabel,
-  getPDFDataSummary,
 } from './astrologyEngine';
 import {
   getSyncConfig, setSyncConfig, clearSyncConfig, isSupabaseConfigured,
-  cloudLoad, cloudSave, testConnection,
+  cloudLoad, cloudSave, testConnection, SyncConflictError,
   signOut, getSession, onAuthChange,
-  uploadReport, getReportUrl, deleteReport,
+  uploadReport, getReportUrl,
 } from './cloudSync';
 import AuthScreen from './AuthScreen';
-import AIReading from './AIReading';
 import GuideTour from './GuideTour';
 import AdminDashboard from './AdminDashboard';
+import KundaliChart from './components/KundaliChart';
+import SyncSettingsModal from './components/SyncSettingsModal';
+import ProfileManagerModal from './components/ProfileManagerModal';
 import { VARGAS, buildVargaChart } from './vargas';
+import {
+  PROFILE_COLORS, DEFAULT_BIRTH, ADMIN_EMAILS, PLANET_NAMES, TABS,
+} from './constants';
+import { parseCSV, classifyCategory, parseEventDates } from './utils/csv';
+import { offsetForLocalTime, isValidTimeZone } from './utils/timezone';
+import { buildShareUrl, parseSharedChart, clearSharedChartParam } from './utils/share';
 // pdfParser is only loaded dynamically on PDF upload — never part of the static bundle
 
-// Orbital periods (days). Negative = retrograde (Rahu/Ketu).
-const PLANET_PERIODS_DAYS = {
-  sun: 365.25, moon: 27.32, mercury: 87.97, venus: 224.7,
-  mars: 686.97, jupiter: 4332.59, saturn: 10759.22,
-  rahu: -6793.5, ketu: -6793.5,
-};
-
-// Planet abbreviations matching Astro-Sage
-const PLANET_ABBRS = {
-  sun: 'Su',
-  moon: 'Mo',
-  mercury: 'Me',
-  venus: 'Ve',
-  mars: 'Ma',
-  jupiter: 'Ju',
-  saturn: 'Sa',
-  rahu: 'Ra',
-  ketu: 'Ke'
-};
-
-// Profile avatar color palette
-const PROFILE_COLORS = [
-  '#ca8a04', '#7c3aed', '#0891b2', '#16a34a',
-  '#dc2626', '#ea580c', '#4f46e5', '#be185d',
-  '#0d9488', '#92400e'
-];
-
-// Neutral starting birth details for a fresh account (no hardcoded person).
-const DEFAULT_BIRTH = {
-  name: '',
-  date: '2000-01-01',
-  time: '12:00',
-  placeName: 'New Delhi, Delhi, India',
-  latitude: 28.6139,
-  longitude: 77.2090,
-  timezone: 5.5,
-};
-
-// Accounts that may see admin-only settings (Cloud Sync configuration).
-// Configurable via VITE_ADMIN_EMAILS (comma-separated); defaults to the owner.
-const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || 'penetacle@gmail.com')
-  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-
-// Planet long name helper
-const PLANET_NAMES = {
-  sun: 'Sun (Surya)',
-  moon: 'Moon (Chandra)',
-  mercury: 'Mercury (Budha)',
-  venus: 'Venus (Shukra)',
-  mars: 'Mars (Mangal)',
-  jupiter: 'Jupiter (Guru)',
-  saturn: 'Saturn (Shani)',
-  rahu: 'Rahu (North Node)',
-  ketu: 'Ketu (South Node)'
-};
-
-// Tab navigation config (icons + descriptions; keys 1-6 jump between tabs)
-const TABS = [
-  { id: 'birth-chart',         icon: '☉', label: 'Birth Details & Trik Bhava',    desc: 'Natal planet positions, dignities, nakshatras and karmic 6-8-12 house analysis.' },
-  { id: 'interactive-chart',   icon: '◈', label: 'Interactive Kundali',            desc: 'North-Indian chart with live transit overlay — drag planets or scrub the timeline.' },
-  { id: 'historical-transits', icon: '↺', label: 'Historical Transits (50 Yr)',    desc: 'Scan five decades of a planet’s sign ingresses through your houses.' },
-  { id: 'predictions',         icon: '✦', label: 'Life Events Matcher',            desc: 'Match logged life events to transit signatures and project future reoccurrences.' },
-  { id: 'alignment-transits',  icon: '✧', label: 'Degree & Nakshatra Transits',    desc: 'Exact-degree and nakshatra alignment windows over your natal points.' },
-  { id: 'dasha-system',        icon: '☽', label: 'Vimshottari Dasha',              desc: 'Full Mahadasha → Antardasha → Pratyantar timeline from your Moon nakshatra.' },
-];
-
-// Lord placements interpretations database
-const DUSTHANA_INTERPRETATIONS = {
-  lord6: {
-    1: 'The 6th Lord is in the 1st House. Challenges, adversaries, or health struggles are deeply intertwined with your personality and self-growth. In accordance with Brihat Parashara Hora Shastra, this is a warrior placement. You are meant to overcome obstacles through direct personal struggle. Pandit Krishna Ashant teaches that this placement creates a persistent feeling of having to fight for your identity, forcing you to develop unmatched courage, resilience, and service-oriented consciousness.',
-    2: 'The 6th Lord is in the 2nd House. Financial resources, family relations, and speech might be sources of conflict or debt. However, you will learn to manage finances with absolute precision. Krishna Ashant notes a karmic pattern of having to constantly clean up or organize family resources, which ultimately grants you financial prudence and strategic mastery over material resources.',
-    3: 'The 6th Lord is in the 3rd House. Your courage, communication, and relationships with siblings are activated by struggles. It indicates a sharp, defensive mind. You excel in debates or technical skills. Krishna Ashant details that this placement requires you to channel your mental anxiety into writing, speaking, or manual skills, transforming nervous energy into artistic or analytical execution.',
-    4: 'The 6th Lord is in the 4th House. Inner happiness, mother, and home environment are affected by conflicts or responsibilities. You may feel a domestic burden. However, this teaches emotional discipline. Under Pandit Krishna Ashant\'s teachings, the 4th house represents the inner sanctuary. Having the 6th lord here indicates that your home is a place of service, teaching you to find peace within rather than relying on external comforts.',
-    5: 'The 6th Lord is in the 5th House. Children, romance, and intelligence are colored by obstacles. Speculative investments should be made with extreme caution. But your critical thinking and analytical intelligence are highly developed. Krishna Ashant points out that this placement demands you to guide others through their problems, turning your intellectual struggles into counseling wisdom.',
-    6: 'The 6th Lord is in the 6th House. This forms Harsha Vipareeta Raja Yoga! It gives you a robust constitution, immunity to diseases, and the capacity to effortlessly conquer your competitors. Your struggles become the source of your greatest strength. In accordance with Pandit Krishna Ashant, you possess a natural psychological armor that converts friction into direct power, succeeding where others fall.',
-    7: 'The 6th Lord is in the 7th House. Partnerships and marriage involve disputes, duties, or health adjustments. You might marry someone in the medical, legal, or service professions. Krishna Ashant points out a projection of the shadow self onto the partner. The relationship is a karmic classroom, teaching you to resolve conflicts through selfless compromise and absolute honesty.',
-    8: 'The 6th Lord is in the 8th House. This forms a Vipareeta Raja Yoga (Harsha Yoga variant). Sudden transformations, hidden knowledge, and longevity are highlighted. It gives capacity to resolve complex crises. Krishna Ashant describes this as a path of psychological alchemy: you must face hidden fears, debts, or secrets, finding power through total surrender and regeneration.',
-    9: 'The 6th Lord is in the 9th House. Religious beliefs, higher education, and relations with father or mentors have obstacles. You may question dogmas. Krishna Ashant notes that you are meant to find your own truth through trial and error, transforming your philosophical doubts into personal, experiential wisdom.',
-    10: 'The 6th Lord is in the 10th House. Career path involves service, healing, resolving conflicts, or working in competitive environments. You will rise to power by solving others\' problems. Krishna Ashant suggests that your public life is dedicated to fighting obstacles, making you a natural counselor, manager, or legal/medical expert.',
-    11: 'The 6th Lord is in the 11th House. Gains and friendships might come through competitive endeavors, litigation, or health services. You may face friction with elder siblings or groups. Krishna Ashant notes that you must learn to cooperate and use your critical mind to build networks that benefit the marginalized, rather than focusing solely on personal gains.',
-    12: 'The 6th Lord is in the 12th House. This forms Vipareeta Raja Yoga! It converts expenses and isolation into spiritual breakthroughs. You overcome hidden enemies by ignoring them. Krishna Ashant explains that your karmic struggles are dissolved in the subconscious, making you a master of psychological release and silent endurance.'
-  },
-  lord8: {
-    1: 'The 8th Lord is in the 1st House. Your life is marked by profound transformations, sudden changes, and deep interest in hidden or occult matters. You have a magnetic, mysterious personality. Krishna Ashant teaches that you must undergo periodic "ego deaths" and rebuild yourself from the ashes. Your identity is a canvas of constant rebirth.',
-    2: 'The 8th Lord is in the 2nd House. Financial fluctuations, sudden gains, or occult wealth are indicated. Speech is powerful and revealing. Krishna Ashant notes that you must learn to value spiritual assets over material attachments, as sudden transformations will teach you that true security lies within.',
-    3: 'The 8th Lord is in the 3rd House. Your communication, writing, and hands-on skills are deeply analytical and investigative. You may uncover secrets or research deeply. Krishna Ashant points out that your mind is drawn to taboos, demanding that you use your intellect to bring hidden truths to light.',
-    4: 'The 8th Lord is in the 4th House. Sudden changes in domestic life or real estate are indicated. Mother\'s life has sudden phases. You have deep intuition and interest in esoteric history. Krishna Ashant explains that your emotional foundation is anchored in the unseen, requiring you to heal inherited family trauma.',
-    5: 'The 8th Lord is in the 5th House. Deep intuition, interest in mantras, tantra, or creative occult projects. Romance has intense, transformative phases. Krishna Ashant details that your creative power is linked to the subconscious, letting you manifest deep, symbolic art or wisdom.',
-    6: 'The 8th Lord is in the 6th House. This forms Sarala Vipareeta Raja Yoga! It gives you the power to withstand crises, defeat chronic diseases, and turn sudden attacks by enemies to your advantage. Krishna Ashant notes that you are a spiritual alchemist, transforming crises into personal resilience.',
-    7: 'The 8th Lord is in the 7th House. Marital life or partnerships undergo intense transitions, transformations, or involve hidden factors. Your partner may be deeply mystical or wealthy. Krishna Ashant suggests that relationships force you to confront your shadow, teaching you intimacy through complete vulnerability.',
-    8: 'The 8th Lord is in the 8th House. This forms a powerful Sarala Vipareeta Raja Yoga! It yields immense longevity, psychic intuition, and mastery over occult sciences. You are comfortable with death and changes. Krishna Ashant states that you are a natural keeper of secrets, carrying an unshakeable presence that calms others in times of crisis.',
-    9: 'The 8th Lord is in the 9th House. Sudden changes in belief systems, foreign travels, or philosophical views. Relationship with father/mentors has transformative phases. Krishna Ashant notes that your spiritual journey is a path of dramatic revelations, teaching you to seek truth beyond dogma.',
-    10: 'The 8th Lord is in the 10th House. Your career is characterized by research, investigation, handling secrets, or sudden shifts. You might excel in crisis management. Krishna Ashant indicates that your professional role is to manage transformation, guiding organizations or individuals through rebirth.',
-    11: 'The 8th Lord is in the 11th House. Sudden gains, inheritance, or wealth from occult or hidden sources. Friction in friendships but deep, select networks. Krishna Ashant notes that you must use your resources to support occult sciences or collective transformation, aligning your gains with higher spiritual plans.',
-    12: 'The 8th Lord is in the 12th House. This forms Vipareeta Raja Yoga! Deep psychic abilities, dream travel, interest in moksha (spiritual liberation), and foreign connections. Krishna Ashant explains that your subconscious is a wellspring of ancient wisdom, letting you dissolve karmic debts through meditation.'
-  },
-  lord12: {
-    1: 'The 12th Lord is in the 1st House. You are naturally introspective, private, and drawn to foreign lands or isolation. You have a dreamlike, ethereal quality. Krishna Ashant notes that your physical energy is linked to the sub-conscious; you require regular solitude to recharge your life force.',
-    2: 'The 12th Lord is in the 2nd House. Expenditures on family, voice, or food are indicated. You may earn from foreign resources or charity. Krishna Ashant warns of speech that may lead to losses, advising you to practice silence and speak only absolute truth.',
-    3: 'The 12th Lord is in the 3rd House. Your communication is intuitive, poetic, or spiritual. Siblings may move to foreign lands. Krishna Ashant explains that your writing or hands-on work has a meditative quality, serving as a medium for subconscious expression.',
-    4: 'The 12th Lord is in the 4th House. Relocation to a foreign country or living in a secluded place. Mother is spiritually inclined. Krishna Ashant notes that you may feel a sense of displacement, which is a call to realize that your true home is within the divine presence.',
-    5: 'The 12th Lord is in the 5th House. Deep spiritual wisdom, meditation, and creative isolation. Speculative risks should be avoided. Krishna Ashant suggests that your children may be highly spiritual or live abroad, and your intelligence is guided by intuitive downloads.',
-    6: 'The 12th Lord is in the 6th House. This forms Vimala Vipareeta Raja Yoga! It guards you against major financial debts, translates expenditures into charitable deeds, and neutralizes daily stressors. Krishna Ashant points out that you possess the unique ability to work tirelessly behind the scenes without seeking ego validation.',
-    7: 'The 12th Lord is in the 7th House. Marital life involves spiritual connections or periods of physical distance. Partner may be of foreign origin or highly detached. Krishna Ashant suggests that you learn the lesson of unconditional love, letting go of personal expectations in relationships.',
-    8: 'The 12th Lord is in the 8th House. This forms a Vipareeta Raja Yoga (Vimala Yoga variant). Deep mystical experiences, interest in astral travel, dream analysis, and secrets. Krishna Ashant details that you have the power to dissolve psychological trauma through spiritual surrender and retreat.',
-    9: 'The 12th Lord is in the 9th House. Traveling to distant lands for spiritual pilgrimages, studying esoteric philosophies, and detachment from dogmatic beliefs. Krishna Ashant explains that your gurus are found in dreams or silent contemplation, guiding you to a path of absolute freedom.',
-    10: 'The 12th Lord is in the 10th House. Working in hospitals, prisons, ashrams, charities, or multinational corporations. You work best in seclusion or behind the scenes. Krishna Ashant suggests that your career is a form of spiritual service, where you spend energy to liberate others.',
-    11: 'The 12th Lord is in the 11th House. Spending money on philanthropic networks, foreign travels, or spiritual groups. Gains are unpredictable but spiritual networks are strong. Krishna Ashant warns against superficial associations, recommending you seek friendships that elevate your consciousness.',
-    12: 'The 12th Lord is in the 12th House. This forms Vimala Vipareeta Raja Yoga! Highly spiritual placement indicating profound meditation, peaceful sleep, astral journeys, and preparation for Moksha. Krishna Ashant describes this as a soul that is packing its bags, having realized the impermanence of the physical world.'
-  }
-};
-
-// Built-in CSV Parser (RFC 4180 compliant)
-function parseCSV(text) {
-  const lines = [];
-  let row = [""];
-  let insideQuote = false;
-  
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const nextChar = text[i + 1];
-    
-    if (char === '"') {
-      if (insideQuote && nextChar === '"') {
-        row[row.length - 1] += '"';
-        i++;
-      } else {
-        insideQuote = !insideQuote;
-      }
-    } else if (char === ',' && !insideQuote) {
-      row.push("");
-    } else if ((char === '\r' || char === '\n') && !insideQuote) {
-      if (char === '\r' && nextChar === '\n') {
-        i++;
-      }
-      lines.push(row);
-      row = [""];
-    } else {
-      row[row.length - 1] += char;
-    }
-  }
-  if (row.length > 1 || row[0] !== "") {
-    lines.push(row);
-  }
-  return lines;
-}
-
-// Smart Category Classifier based on event context keywords
-function classifyCategory(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  
-  if (text.includes('marry') || text.includes('marriage') || text.includes('wife') || text.includes('husband') || text.includes('love') || text.includes('relationship') || text.includes('conson') || text.includes('honeymoon') || text.includes('son') || text.includes('daughter') || text.includes('child') || text.includes('family') || text.includes('parents') || text.includes('brother')) {
-    return 'Relationship';
-  }
-  if (text.includes('spiritual') || text.includes('yoga') || text.includes('guru') || text.includes('meditation') || text.includes('occult') || text.includes('temple') || text.includes('religious') || text.includes('gayatri') || text.includes('sahaja')) {
-    return 'Spiritual';
-  }
-  if (text.includes('travel') || text.includes('relocation') || text.includes('moved') || text.includes('shifted') || text.includes('hometown') || text.includes('pg') || text.includes('rented house') || text.includes('bangalore') || text.includes('pune') || text.includes('hyderabad') || text.includes('uk') || text.includes('paris') || text.includes('switzerland') || text.includes('italy') || text.includes('kashmir')) {
-    return 'Travel';
-  }
-  if (text.includes('health') || text.includes('surgery') || text.includes('kidney') || text.includes('illness') || text.includes('chickenpox') || text.includes('hospital') || text.includes('diseases') || text.includes('accident') || text.includes('sick')) {
-    return 'Health';
-  }
-  if (text.includes('finance') || text.includes('financial') || text.includes('debt') || text.includes('money') || text.includes('savings') || text.includes('donation') || text.includes('loss') || text.includes('jobless') || text.includes('without money') || text.includes('hike') || text.includes('salary')) {
-    return 'Finance';
-  }
-  if (text.includes('job') || text.includes('work') || text.includes('office') || text.includes('boss') || text.includes('company') || text.includes('promotion') || text.includes('mca') || text.includes('degree') || text.includes('graduation') || text.includes('school') || text.includes('college') || text.includes('study') || text.includes('architect') || text.includes('engineer') || text.includes('specialist') || text.includes('consultant')) {
-    return 'Career';
-  }
-  
-  return 'Career'; // default
-}
-
-// Smart Date Range Parser
-function parseEventDates(yearStr) {
-  const months = {
-    january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
-    may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
-    sep: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10,
-    dec: 11, december: 11
-  };
-
-  const cleanStr = yearStr.trim().toLowerCase().replace(/\s+/g, ' ');
-
-  // Split by dash/en-dash/em-dash or raw "to" or "–"
-  const parts = cleanStr.split(/[\u2013\u2014-]|to/).map(p => p.trim());
-
-  function parseSingleDateStr(str) {
-    if (!str) return null;
-    // Check for month and year, e.g. "march 2000"
-    const wordMatch = str.match(/([a-z]+)\s+(\d{4})/);
-    if (wordMatch) {
-      const mName = wordMatch[1];
-      const yNum = parseInt(wordMatch[2]);
-      if (months[mName] !== undefined) {
-        return { year: yNum, month: months[mName] };
-      }
-    }
-    // Check for year only, e.g. "2000"
-    const yearMatch = str.match(/\b(\d{4})\b/);
-    if (yearMatch) {
-      return { year: parseInt(yearMatch[1]), month: null };
-    }
-    return null;
-  }
-
-  if (parts.length === 2) {
-    const startInfo = parseSingleDateStr(parts[0]);
-    const endInfo = parseSingleDateStr(parts[1]);
-    
-    let startDate;
-    let endDate;
-
-    if (startInfo) {
-      if (startInfo.month !== null) {
-        const m = (startInfo.month + 1).toString().padStart(2, '0');
-        startDate = `${startInfo.year}-${m}-01`;
-      } else {
-        startDate = `${startInfo.year}-01-01`;
-      }
-    } else {
-      startDate = '2000-01-01';
-    }
-    
-    if (endInfo) {
-      if (endInfo.month !== null) {
-        const m = (endInfo.month + 1).toString().padStart(2, '0');
-        const lastDay = new Date(endInfo.year, endInfo.month + 1, 0).getDate();
-        endDate = `${endInfo.year}-${m}-${lastDay.toString().padStart(2, '0')}`;
-      } else {
-        endDate = `${endInfo.year}-12-31`;
-      }
-    } else if (startInfo) {
-      endDate = `${startInfo.year}-12-31`;
-    } else {
-      endDate = '2000-12-31';
-    }
-    return { startDate, endDate };
-  } else {
-    const info = parseSingleDateStr(cleanStr);
-    if (info) {
-      if (info.month !== null) {
-        const m = (info.month + 1).toString().padStart(2, '0');
-        const lastDay = new Date(info.year, info.month + 1, 0).getDate();
-        return {
-          startDate: `${info.year}-${m}-01`,
-          endDate: `${info.year}-${m}-${lastDay.toString().padStart(2, '0')}`
-        };
-      } else {
-        return {
-          startDate: `${info.year}-01-01`,
-          endDate: `${info.year}-12-31`
-        };
-      }
-    }
-  }
-  return { startDate: '2000-01-01', endDate: '2000-12-31' };
-}
+// ── Tab panels are lazy-loaded: each becomes its own chunk, and switching
+//    tabs no longer re-renders 4,000 lines of unrelated JSX. ──
+const BirthChartTab = lazy(() => import('./tabs/BirthChartTab'));
+const InteractiveChartTab = lazy(() => import('./tabs/InteractiveChartTab'));
+const HistoricalTransitsTab = lazy(() => import('./tabs/HistoricalTransitsTab'));
+const PredictionsTab = lazy(() => import('./tabs/PredictionsTab'));
+const AlignmentsTab = lazy(() => import('./tabs/AlignmentsTab'));
+const DashaTab = lazy(() => import('./tabs/DashaTab'));
+const PanchangaTab = lazy(() => import('./tabs/PanchangaTab'));
+const CompatibilityTab = lazy(() => import('./tabs/CompatibilityTab'));
 
 function App() {
   const [activeTab, setActiveTab] = useState('birth-chart');
@@ -353,9 +101,6 @@ function App() {
   const [transitTimeInput, setTransitTimeInput] = useState('12:00');
   const [showNakshatras, setShowNakshatras] = useState(true);
 
-  // Transit drag-to-scrub state
-  const [transitDragInfo, setTransitDragInfo] = useState(null); // { planetId, startAngle, startDateMs }
-  const transitSvgRef = useRef(null);
 
   // Historical Transits Timeline State
   const [selectedTransitPlanet, setSelectedTransitPlanet] = useState('saturn');
@@ -431,6 +176,9 @@ function App() {
   });
   const [predictionSaveNameInput, setPredictionSaveNameInput] = useState('');
 
+  // Weekly transit-alert emails (worker cron) — per-user opt-in, synced in the bundle.
+  const [alertsEnabled, setAlertsEnabled] = useState(false);
+
   // PDF parsing state
   const [parsingPDFForProfile, setParsingPDFForProfile] = useState(null); // profileId being parsed
   const [pdfParseError, setPdfParseError] = useState('');
@@ -458,6 +206,7 @@ function App() {
   const cloudReadyRef = useRef(false);      // gates pushes until the startup pull completes
   const lastPushedJsonRef = useRef(null);   // avoids re-pushing identical data
   const syncTimerRef = useRef(null);
+  const lastSyncedAtRef = useRef(null);  // updated_at of the row we last pulled/pushed (conflict detection)
 
   // ── Auth (Supabase) ────────────────────────────────────────────────────
   // session: undefined = still checking · null = signed out · object = signed in
@@ -496,6 +245,7 @@ function App() {
     setDegreeAlignments([]);
     setHasScannedAlignments(false);
     setHistoricalTransits([]);
+    setAlertsEnabled(false);
     ['astro_active_profile_id', 'astro_saved_profiles', 'astro_saved_predictions',
      'astro_birth_details', 'astro_life_events'].forEach(k => localStorage.removeItem(k));
   }, []);
@@ -542,7 +292,8 @@ function App() {
     savedPredictions: d.savedPredictions,
     activeProfileId: d.activeProfileId,
     birthDetails: d.birthDetails,
-    lifeEvents: d.lifeEvents
+    lifeEvents: d.lifeEvents,
+    alertsEnabled: !!d.alertsEnabled
   });
 
   const applyCloudBundle = useCallback((d) => {
@@ -550,6 +301,7 @@ function App() {
     if (Array.isArray(d.savedProfiles)) setSavedProfiles(d.savedProfiles);
     if (Array.isArray(d.savedPredictions)) setSavedPredictions(d.savedPredictions);
     if (Array.isArray(d.lifeEvents)) setLifeEvents(d.lifeEvents);
+    setAlertsEnabled(!!d.alertsEnabled);
     if (d.birthDetails && d.birthDetails.date) setBirthDetails(d.birthDetails);
     if (d.activeProfileId !== undefined && d.activeProfileId !== null) {
       setActiveProfileId(d.activeProfileId);
@@ -577,15 +329,18 @@ function App() {
         if (row && row.data) {
           applyCloudBundle(row.data);
           lastPushedJsonRef.current = canonicalBundleJson(row.data);
+          lastSyncedAtRef.current = row.updatedAt || null;
         } else {
           // Fresh account: start clean and seed an empty bundle for this user.
           resetLocalData();
           const bundle = {
             version: 1, savedProfiles: [], savedPredictions: [], activeProfileId: null,
-            birthDetails: { ...DEFAULT_BIRTH }, lifeEvents: [], savedAt: new Date().toISOString()
+            birthDetails: { ...DEFAULT_BIRTH }, lifeEvents: [], alertsEnabled: false,
+            savedAt: new Date().toISOString()
           };
-          await cloudSave(bundle);
+          const saved = await cloudSave(bundle);
           lastPushedJsonRef.current = canonicalBundleJson(bundle);
+          lastSyncedAtRef.current = saved?.updatedAt || null;
         }
         setSyncStatus('synced');
         setSyncError('');
@@ -612,6 +367,7 @@ function App() {
       activeProfileId,
       birthDetails,
       lifeEvents,
+      alertsEnabled,
       savedAt: new Date().toISOString()
     };
     const json = canonicalBundleJson(bundle);
@@ -620,11 +376,40 @@ function App() {
     clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(async () => {
       try {
-        await cloudSave(bundle);
+        // Conflict-aware push: refuses to clobber a row another device updated
+        // after our last pull (previously this was blind last-write-wins).
+        const saved = await cloudSave(bundle, { expectedUpdatedAt: lastSyncedAtRef.current });
         lastPushedJsonRef.current = json;
+        lastSyncedAtRef.current = saved?.updatedAt || null;
         setSyncStatus('synced');
         setSyncError('');
       } catch (err) {
+        if (err instanceof SyncConflictError) {
+          const useCloud = window.confirm(
+            'This account was updated from another device since this page last synced.\n\n' +
+            'OK — load the newer cloud data (recommended; this device\u2019s unsynced edits are discarded)\n' +
+            'Cancel — overwrite the cloud with THIS device\u2019s data'
+          );
+          if (useCloud && err.serverData) {
+            applyCloudBundle(err.serverData);
+            lastPushedJsonRef.current = canonicalBundleJson(err.serverData);
+            lastSyncedAtRef.current = err.serverUpdatedAt || null;
+            setSyncStatus('synced');
+            setSyncError('');
+          } else {
+            try {
+              const forced = await cloudSave(bundle); // no expectedUpdatedAt = force
+              lastPushedJsonRef.current = json;
+              lastSyncedAtRef.current = forced?.updatedAt || null;
+              setSyncStatus('synced');
+              setSyncError('');
+            } catch (err2) {
+              setSyncStatus('error');
+              setSyncError(err2.message || 'Could not save to cloud');
+            }
+          }
+          return;
+        }
         console.error('Cloud sync save error', err);
         setSyncStatus('error');
         setSyncError(err.message || 'Could not save to cloud');
@@ -632,7 +417,7 @@ function App() {
     }, 1500);
     return () => clearTimeout(syncTimerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents, user?.id]);
+  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents, alertsEnabled, user?.id]);
 
   // Advanced: override the Supabase URL/key (most users never need this — the
   // app ships pre-configured). Saving reloads so the auth client re-inits.
@@ -1199,22 +984,45 @@ function App() {
     setGeocodingLoading(true);
     setGeocodingError('');
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
-      const data = await response.json();
-      if (data && data.length > 0) {
-        const item = data[0];
-        const lat = parseFloat(item.lat);
-        const lon = parseFloat(item.lon);
-        // Estimate timezone offset from longitude (15 deg = 1 hour)
-        const timezoneOffset = Math.round((lon / 15) * 2) / 2; // rounds to nearest 0.5 hour
-        
-        setBirthDetails(prev => ({
-          ...prev,
-          placeName: item.display_name,
-          latitude: lat,
-          longitude: lon,
-          timezone: timezoneOffset
-        }));
+      // Primary: Open-Meteo geocoder — returns the IANA timezone, so we can
+      // compute the true historical UTC offset (incl. DST) at the birth moment.
+      let place = null;
+      try {
+        const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=1&format=json`);
+        const d = await r.json();
+        if (d?.results?.length) {
+          const it = d.results[0];
+          place = {
+            name: [it.name, it.admin1, it.country].filter(Boolean).join(', '),
+            lat: it.latitude, lon: it.longitude, tzId: it.timezone || null,
+          };
+        }
+      } catch { /* fall through to Nominatim */ }
+
+      if (!place) {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
+        const data = await response.json();
+        if (data && data.length > 0) {
+          place = { name: data[0].display_name, lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), tzId: null };
+        }
+      }
+
+      if (place) {
+        setBirthDetails(prev => {
+          // True offset at the birth date when we know the IANA zone;
+          // otherwise fall back to the old longitude estimate.
+          const offset = place.tzId && isValidTimeZone(place.tzId)
+            ? offsetForLocalTime(place.tzId, prev.date, prev.time)
+            : null;
+          return {
+            ...prev,
+            placeName: place.name,
+            latitude: place.lat,
+            longitude: place.lon,
+            timezone: offset !== null ? offset : Math.round((place.lon / 15) * 2) / 2,
+            tzId: place.tzId || undefined,
+          };
+        });
         setSearchQuery('');
       } else {
         setGeocodingError('No results found. Please check spelling or enter coordinates manually.');
@@ -1226,6 +1034,44 @@ function App() {
       setGeocodingLoading(false);
     }
   };
+
+  // When the birth date/time changes and we know the place's IANA timezone,
+  // keep the numeric offset in sync (handles DST at the birth moment).
+  useEffect(() => {
+    if (!birthDetails.tzId || !isValidTimeZone(birthDetails.tzId)) return;
+    const offset = offsetForLocalTime(birthDetails.tzId, birthDetails.date, birthDetails.time);
+    if (offset !== null && offset !== birthDetails.timezone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBirthDetails(prev => ({ ...prev, timezone: offset }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [birthDetails.tzId, birthDetails.date, birthDetails.time]);
+
+  // ── Shareable chart links ────────────────────────────────────────────────
+  // On first load, a ?chart= param overrides birth details (read-only view of
+  // someone else's chart — nothing is saved unless the viewer does so).
+  const [sharedChartActive, setSharedChartActive] = useState(false);
+  useEffect(() => {
+    const shared = parseSharedChart();
+    if (shared) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBirthDetails(shared);
+      setSharedChartActive(true);
+      clearSharedChartParam();
+    }
+  }, []);
+
+  const [shareFlash, setShareFlash] = useState(false);
+  const handleShareChart = useCallback(async () => {
+    const url = buildShareUrl(birthDetails);
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareFlash(true);
+      setTimeout(() => setShareFlash(false), 2500);
+    } catch {
+      window.prompt('Copy this share link:', url);
+    }
+  }, [birthDetails]);
 
   const handleScanHistoricalTransits = () => {
     setScanningTransits(true);
@@ -1438,528 +1284,6 @@ function App() {
     return () => clearTimeout(timer);
   }, [activeTab, natalChart, lifeEvents, birthDetails, autoScanKey, autoMatchesKey]);
 
-  // Helper: format degrees to standard zodiac degrees minutes (e.g. 14°25')
-  const formatDegrees = (deg) => {
-    const d = Math.floor(deg);
-    const m = Math.floor((deg - d) * 60);
-    return `${d}°${m.toString().padStart(2, '0')}'`;
-  };
-
-
-  // Mouse/touch drag → time scrub on transit chart
-  useEffect(() => {
-    if (!transitDragInfo) return;
-    const getSvgAngle = (clientX, clientY) => {
-      const el = transitSvgRef.current;
-      if (!el) return 0;
-      const r = el.getBoundingClientRect();
-      const x = (clientX - r.left) / r.width * 400 - 200;
-      const y = (clientY - r.top) / r.height * 400 - 200;
-      return Math.atan2(x, -y); // 0 = top, clockwise positive
-    };
-    const onMove = (e) => {
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      let delta = getSvgAngle(clientX, clientY) - transitDragInfo.startAngle;
-      // Normalise to [-π, π]
-      while (delta > Math.PI)  delta -= 2 * Math.PI;
-      while (delta < -Math.PI) delta += 2 * Math.PI;
-      const period = PLANET_PERIODS_DAYS[transitDragInfo.planetId] || 365.25;
-      // Counterclockwise drag (delta < 0) = forward in time for prograde planets
-      const newMs = transitDragInfo.startDateMs - (delta / (2 * Math.PI)) * period * 86400000;
-      const d = new Date(newMs);
-      setTransitDateInput(d.toISOString().split('T')[0]);
-      setTransitTimeInput(d.toISOString().substring(11, 16));
-    };
-    const onUp = () => setTransitDragInfo(null);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup',   onUp);
-    window.addEventListener('touchmove', onMove, { passive: true });
-    window.addEventListener('touchend',  onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup',   onUp);
-      window.removeEventListener('touchmove', onMove);
-      window.removeEventListener('touchend',  onUp);
-    };
-  }, [transitDragInfo]);
-
-  // Get SVG Layout of North Indian Chart.
-  // `draggable` enables time-scrub dragging on the transit chart (uses transitSvgRef).
-  const renderNorthIndianChart = (planetsList, lagnaSign, draggable = false) => {
-    if (lagnaSign === undefined) return null;
-
-    // Per-planet colors — matched to reference screenshot
-    const PLANET_COLORS = {
-      sun:     '#CC0000',  // bright crimson
-      moon:    '#9575CD',  // medium purple
-      mercury: '#283593',  // dark navy blue
-      venus:   '#2E7D32',  // dark green
-      mars:    '#2E7D32',  // dark green
-      jupiter: '#AD1457',  // deep magenta/pink
-      saturn:  '#B71C1C',  // dark red
-      rahu:    '#BF360C',  // burnt orange-red
-      ketu:    '#B8860B',  // dark goldenrod/brown
-    };
-
-    // Build lists of planets in each of the 12 houses
-    const housesPlanets = {};
-    for (let h = 1; h <= 12; h++) {
-      housesPlanets[h] = [];
-    }
-
-    if (planetsList) {
-      Object.keys(planetsList).forEach(key => {
-        const p = planetsList[key];
-        const house = getHouseFromLagna(p.signIndex, lagnaSign);
-        housesPlanets[house].push(p);
-      });
-    }
-
-    // Chart geometry (400×400 viewBox, y increases downward):
-    //   Outer border: (5,5)→(395,395)
-    //   Inner diamond vertices: (200,5)(395,200)(200,395)(5,200)
-    //   Diag1 y=x: intersects inner diamond at (102,102) and (298,298)
-    //   Diag2 y=-x+400: intersects at (298,102) and (102,298)  Center: (200,200)
-    //
-    // House regions (counter-clockwise from top):
-    //   Inner 4 diamonds — 1=top(y<x&y<-x+400), 4=left(y>x&y<-x+400),
-    //                       7=bottom(y>x&y>-x+400), 10=right(y<x&y>-x+400)
-    //   Outer 8 triangles — corner areas outside the inner diamond
-    //
-    // Sign numbers: at OUTER CORNER for outer-8 triangles; near CENTER TIP for inner-4.
-    // Planet centroids: house centroid (well inside each region, away from sign nr).
-    const housePlacements = {
-      //            sign nr                       planet centroid
-      1:  { signX: 200, signY: 68,  cx: 200, cy: 120 },  // top ◇ — sign mid-diamond
-      2:  { signX: 100, signY: 20,  cx: 95,  cy: 65  },  // UL upper △ — near top edge
-      3:  { signX: 20,  signY: 100, cx: 65,  cy: 95  },  // UL lower △ — near left edge
-      4:  { signX: 68,  signY: 200, cx: 120, cy: 200 },  // left ◇ — sign mid-diamond
-      5:  { signX: 20,  signY: 300, cx: 65,  cy: 305 },  // LL upper △ — near left edge
-      6:  { signX: 100, signY: 380, cx: 95,  cy: 335 },  // LL lower △ — near bottom edge
-      7:  { signX: 200, signY: 332, cx: 200, cy: 280 },  // bottom ◇ — sign mid-diamond
-      8:  { signX: 300, signY: 380, cx: 305, cy: 335 },  // LR lower △ — near bottom edge
-      9:  { signX: 380, signY: 300, cx: 335, cy: 305 },  // LR upper △ — near right edge
-      10: { signX: 332, signY: 200, cx: 280, cy: 200 },  // right ◇ — sign mid-diamond
-      11: { signX: 380, signY: 100, cx: 335, cy: 95  },  // UR lower △ — near right edge
-      12: { signX: 300, signY: 20,  cx: 305, cy: 65  },  // UR upper △ — near top edge
-    };
-
-    const LINE_COLOR = '#E07B00';
-    const LINE_WIDTH = 2;
-    const LINE_OPACITY = 1;
-
-    return (
-      <svg
-        ref={draggable ? transitSvgRef : undefined}
-        viewBox="0 0 400 400"
-        className="kundali-svg"
-        overflow="hidden"
-        aria-label="North Indian Vedic Astrology Chart"
-        style={draggable ? { cursor: transitDragInfo ? 'grabbing' : 'default' } : undefined}
-      >
-        {/* Outer border */}
-        <rect x="5" y="5" width="390" height="390" fill="white"
-          stroke={LINE_COLOR} strokeWidth="2.5" />
-
-        {/* Diagonals */}
-        <line x1="5"   y1="5"   x2="395" y2="395" stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-        <line x1="395" y1="5"   x2="5"   y2="395" stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-
-        {/* Inner Diamond */}
-        <line x1="200" y1="5"   x2="395" y2="200" stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-        <line x1="395" y1="200" x2="200" y2="395" stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-        <line x1="200" y1="395" x2="5"   y2="200" stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-        <line x1="5"   y1="200" x2="200" y2="5"   stroke={LINE_COLOR} strokeWidth={LINE_WIDTH} opacity={LINE_OPACITY} />
-
-        {/* Houses */}
-        {Object.keys(housePlacements).map(hStr => {
-          const houseNum = parseInt(hStr);
-          const { signX, signY, cx, cy } = housePlacements[houseNum];
-          const signIndex = (lagnaSign + houseNum - 1) % 12;
-          const signNum = signIndex + 1;
-          const planets = housesPlanets[houseNum];
-
-          const LINE_H = 20;
-          const totalH = (planets.length - 1) * LINE_H;
-          const startY = cy - totalH / 2;
-
-          return (
-            <g key={houseNum}>
-              {/* Sign number — small, at outer edge of house, clear of all lines */}
-              <text
-                x={signX} y={signY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fill="#1B5E20"
-                fontSize="12"
-                fontWeight="800"
-                fontFamily="sans-serif"
-              >
-                {signNum}
-              </text>
-
-              {/* Planets stacked vertically — bold, with degree superscript */}
-              {planets.map((p, i) => {
-                const abbr  = PLANET_ABBRS[p.id] || p.id.slice(0, 2);
-                const deg   = String(Math.floor(p.degree)).padStart(2, '0');
-                const color = PLANET_COLORS[p.id] || '#92400e';
-                const yPos  = startY + i * LINE_H;
-
-                const isDragging = draggable && transitDragInfo?.planetId === p.id;
-                return (
-                  <g key={p.id}>
-                    {isDragging && (
-                      <circle cx={cx} cy={yPos} r="16"
-                        fill="none" stroke={color} strokeWidth="1.5"
-                        opacity="0.55" strokeDasharray="3 2" />
-                    )}
-                    <text
-                      x={cx}
-                      y={yPos}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fill={color}
-                      fontSize="17"
-                      fontWeight="800"
-                      fontFamily="monospace, sans-serif"
-                      style={draggable ? { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' } : undefined}
-                      onMouseDown={draggable ? (e) => {
-                        e.preventDefault();
-                        const r = e.currentTarget.ownerSVGElement?.getBoundingClientRect();
-                        if (!r) return;
-                        const x = (e.clientX - r.left) / r.width * 400 - 200;
-                        const y = (e.clientY - r.top) / r.height * 400 - 200;
-                        const angle = Math.atan2(x, -y);
-                        setTransitDragInfo({
-                          planetId: p.id,
-                          startAngle: angle,
-                          startDateMs: new Date(`${transitDateInput}T${transitTimeInput}Z`).getTime(),
-                        });
-                      } : undefined}
-                      onTouchStart={draggable ? (e) => {
-                        const t = e.touches[0];
-                        const r = e.currentTarget.ownerSVGElement?.getBoundingClientRect();
-                        if (!r) return;
-                        const x = (t.clientX - r.left) / r.width * 400 - 200;
-                        const y = (t.clientY - r.top) / r.height * 400 - 200;
-                        setTransitDragInfo({
-                          planetId: p.id,
-                          startAngle: Math.atan2(x, -y),
-                          startDateMs: new Date(`${transitDateInput}T${transitTimeInput}Z`).getTime(),
-                        });
-                      } : undefined}
-                    >
-                      {abbr}{p.retrograde ? '*' : ''}
-                      <tspan dy="-7" fontSize="11" fontWeight="700">{deg}</tspan>
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          );
-        })}
-      </svg>
-    );
-  };
-
-  // ── Cloud Sync Settings Modal ─────────────────────────────────────────
-  const renderSyncSettingsModal = () => {
-    if (!showSyncSettings) return null;
-    const configured = !!getSyncConfig();
-    return (
-      <div className="pm-overlay" onClick={() => setShowSyncSettings(false)}>
-        <div className="pm-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
-          <div className="pm-header">
-            <h2 className="pm-title">☁ Cloud Sync</h2>
-            <button className="pm-close" onClick={() => setShowSyncSettings(false)}>✕</button>
-          </div>
-          <div className="pm-form-section">
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 10px' }}>
-              The app is pre-configured — just <strong>Create Account / Sign In</strong>. Your profiles,
-              predictions, reports and charts are private to your account and sync across devices.
-              These fields are only for <strong>advanced</strong> use (pointing the app at a different
-              Supabase project). Saving reloads the app. One-time database setup is in
-              <strong> SUPABASE_AUTH_SETUP.md</strong>.
-            </p>
-            <div className="pm-section-label">Supabase Project URL</div>
-            <input
-              className="text-input"
-              placeholder="https://xxxxx.supabase.co"
-              value={syncForm.url}
-              onChange={e => setSyncForm(f => ({ ...f, url: e.target.value }))}
-              style={{ width: '100%', marginBottom: '8px' }}
-            />
-            <div className="pm-section-label">Anon (public) API Key</div>
-            <input
-              className="text-input"
-              type="password"
-              placeholder="eyJhbGciOi..."
-              value={syncForm.anonKey}
-              onChange={e => setSyncForm(f => ({ ...f, anonKey: e.target.value }))}
-              style={{ width: '100%', marginBottom: '8px' }}
-            />
-            {syncError && (
-              <p style={{ fontSize: '12px', color: '#dc2626', margin: '4px 0 8px' }}>⚠ {syncError}</p>
-            )}
-            {configured && syncStatus === 'synced' && !syncError && (
-              <p style={{ fontSize: '12px', color: '#16a34a', margin: '4px 0 8px' }}>✓ Connected — data is syncing automatically.</p>
-            )}
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button
-                className="btn btn-primary"
-                style={{ fontSize: '12px' }}
-                disabled={syncConnecting}
-                onClick={handleSyncConnect}
-              >{syncConnecting ? 'Connecting…' : configured ? 'Reconnect / Update' : 'Connect & Sync'}</button>
-              {configured && (
-                <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={handleSyncDisconnect}>
-                  Disconnect
-                </button>
-              )}
-            </div>
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
-              Connecting loads any existing cloud data (cloud wins). If the cloud is empty,
-              your current local data is uploaded as the starting point.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ── Profile Manager Modal ─────────────────────────────────────────────
-  const renderProfileManagerModal = () => {
-    if (!showProfileManager) return null;
-    return (
-      <div className="pm-overlay" onClick={() => { setShowProfileManager(false); setEditingProfileId(null); }}>
-        <div className="pm-panel" onClick={e => e.stopPropagation()}>
-          <div className="pm-header">
-            <h2 className="pm-title">⊙ Profile Manager</h2>
-            <button className="pm-close" onClick={() => { setShowProfileManager(false); setEditingProfileId(null); }}>✕</button>
-          </div>
-
-          {/* Create / Edit Form */}
-          <div className="pm-form-section">
-            <div className="pm-section-label">{editingProfileId ? 'Edit Profile' : 'Save Current as New Profile'}</div>
-            <div className="pm-form-row">
-              <input
-                className="text-input"
-                placeholder="Profile name (e.g. Mom, Me, Client)"
-                value={profileForm.name}
-                onChange={e => setProfileForm(f => ({ ...f, name: e.target.value }))}
-                style={{ flex: 1 }}
-              />
-            </div>
-            <div className="pm-color-row">
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginRight: '6px' }}>Color:</span>
-              {PROFILE_COLORS.map(c => (
-                <button
-                  key={c}
-                  className={`pm-color-dot${profileForm.color === c ? ' selected' : ''}`}
-                  style={{ background: c }}
-                  onClick={() => setProfileForm(f => ({ ...f, color: c }))}
-                  title={c}
-                />
-              ))}
-            </div>
-            <textarea
-              className="text-input"
-              placeholder="Notes (optional — relationship, purpose, etc.)"
-              value={profileForm.notes}
-              onChange={e => setProfileForm(f => ({ ...f, notes: e.target.value }))}
-              rows={2}
-              style={{ resize: 'none', fontSize: '12px', marginTop: '6px', width: '100%' }}
-            />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              {editingProfileId ? (
-                <>
-                  <button className="btn btn-primary" style={{ fontSize: '12px' }} onClick={() => {
-                    setSavedProfiles(prev => prev.map(p => p.id === editingProfileId
-                      ? { ...p, profileName: profileForm.name || p.profileName, color: profileForm.color, notes: profileForm.notes }
-                      : p
-                    ));
-                    setEditingProfileId(null);
-                    setProfileForm({ name: '', color: PROFILE_COLORS[0], notes: '' });
-                  }}>Update Profile</button>
-                  <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => {
-                    setEditingProfileId(null);
-                    setProfileForm({ name: '', color: PROFILE_COLORS[0], notes: '' });
-                  }}>Cancel</button>
-                </>
-              ) : (
-                <button className="btn btn-primary" style={{ fontSize: '12px' }} onClick={() => {
-                  const nameToSave = profileForm.name.trim() || birthDetails.name || 'Unnamed';
-                  const newProfile = {
-                    id: Date.now(),
-                    profileName: nameToSave,
-                    color: profileForm.color,
-                    birthDetails: { ...birthDetails },
-                    lifeEvents: [...lifeEvents],
-                    createdAt: new Date().toISOString(),
-                    notes: profileForm.notes
-                  };
-                  const updated = [...savedProfiles, newProfile];
-                  setSavedProfiles(updated);
-                  setActiveProfileId(newProfile.id);
-                  localStorage.setItem('astro_active_profile_id', String(newProfile.id));
-                  setProfileForm({ name: '', color: PROFILE_COLORS[updated.length % PROFILE_COLORS.length], notes: '' });
-                }}>💾 Save as New Profile</button>
-              )}
-            </div>
-          </div>
-
-          {/* Profiles List */}
-          <div className="pm-list-section">
-            <div className="pm-section-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>All Saved Profiles ({savedProfiles.length})</span>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  className="pm-btn"
-                  style={{ fontSize: '11px', padding: '3px 8px', opacity: savedProfiles.length === 0 ? 0.4 : 1 }}
-                  onClick={handleExportProfiles}
-                  disabled={savedProfiles.length === 0}
-                  title="Export all profiles to a JSON backup file"
-                >⬇ Export</button>
-                <label
-                  className="pm-btn"
-                  style={{ fontSize: '11px', padding: '3px 8px', cursor: 'pointer' }}
-                  title="Import profiles from a previously exported JSON file"
-                >
-                  ⬆ Import
-                  <input type="file" accept=".json" style={{ display: 'none' }} onChange={handleImportProfiles} />
-                </label>
-              </div>
-            </div>
-            {savedProfiles.length === 0 && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px 0' }}>
-                No profiles saved yet. Fill in birth details above and save.
-              </p>
-            )}
-            <div className="pm-list">
-              {savedProfiles.map(prof => {
-                const isActive = activeProfileId === prof.id;
-                const isEditing = editingProfileId === prof.id;
-                return (
-                  <div key={prof.id} className="pm-entry">
-                    {/* ── Top row: avatar · info · action buttons ── */}
-                    <div className={`pm-item${isActive ? ' active' : ''}${isEditing ? ' editing' : ''}`}>
-                      <div className="pm-item-avatar" style={{ background: prof.color || '#ca8a04' }}>
-                        {(prof.profileName || 'U').charAt(0).toUpperCase()}
-                      </div>
-                      <div className="pm-item-info">
-                        <div className="pm-item-name">
-                          {prof.profileName}
-                          {isActive && <span className="pm-active-badge">● Active</span>}
-                          {prof.pdfData && <span className="pm-pdf-badge-small">📄 PDF</span>}
-                        </div>
-                        <div className="pm-item-meta">
-                          Born {prof.birthDetails?.date} · {prof.birthDetails?.placeName?.split(',')[0]}
-                          {prof.lifeEvents?.length ? ` · ${prof.lifeEvents.length} events` : ''}
-                          {prof.pdfData && ` · +${getAccuracyProfile(prof.pdfData).earned}% acc`}
-                        </div>
-                        {prof.notes && <div className="pm-item-notes">{prof.notes}</div>}
-                      </div>
-                      <div className="pm-item-btns">
-                        {!isActive && (
-                          <button className="pm-btn load" onClick={() => { handleLoadProfile(prof); setShowProfileManager(false); }}>Load</button>
-                        )}
-                        <button className="pm-btn edit" onClick={() => {
-                          setEditingProfileId(prof.id);
-                          setProfileForm({ name: prof.profileName, color: prof.color || PROFILE_COLORS[0], notes: prof.notes || '' });
-                        }}>Edit</button>
-                        {isActive && (
-                          <button className="pm-btn sync" title="Sync current birth details & life events into this profile" onClick={handleUpdateActiveProfileData}>Sync ↑</button>
-                        )}
-                        <button className="pm-btn dup" title="Duplicate this profile" onClick={() => handleDuplicateProfile(prof)}>Dup</button>
-                        <button className="pm-btn del" onClick={() => handleDeleteProfile(prof.id)}>✕</button>
-                      </div>
-                    </div>
-
-                    {/* ── PDF Upload / Data Section ── */}
-                    <div className="pm-pdf-section">
-                      {prof.pdfData ? (
-                        <div className="pm-pdf-loaded">
-                          <span className="pm-pdf-icon">📄</span>
-                          <div className="pm-pdf-loaded-info">
-                            <div className="pm-pdf-loaded-name">{prof.pdfFileName || 'AstroSage PDF'} · {prof.pdfData.pageCount}pp · {Math.round((prof.pdfData.confidence?.overall || 0) * 100)}% confidence</div>
-                            <div className="pm-pdf-loaded-meta">
-                              {getPDFDataSummary(prof.pdfData).map(d => (
-                                <span key={d.key} className={`pm-pdf-tag${d.available ? ' available' : ' missing'}`}>
-                                  {d.available ? '✓' : '–'} {d.label}
-                                </span>
-                              ))}
-                            </div>
-                            <div className="pm-pdf-accuracy-bar">
-                              <span className="pm-pdf-acc-label">Accuracy unlocked:</span>
-                              <div className="pm-pdf-acc-track">
-                                <div className="pm-pdf-acc-fill" style={{ width: `${getAccuracyProfile(prof.pdfData).total}%` }} />
-                              </div>
-                              <span className="pm-pdf-acc-num">+{getAccuracyProfile(prof.pdfData).earned}%</span>
-                            </div>
-                          </div>
-                          {prof.pdfStoragePath && (
-                            <button className="pm-pdf-download" title="Download the original PDF report"
-                              disabled={downloadingReport === prof.id}
-                              onClick={() => handleDownloadReport(prof)}>
-                              {downloadingReport === prof.id ? '…' : '⬇ PDF'}
-                            </button>
-                          )}
-                          <button className="pm-btn del" style={{ flexShrink: 0, alignSelf: 'flex-start' }} title="Remove PDF data & stored file"
-                            onClick={async () => {
-                              const path = prof.pdfStoragePath;
-                              setSavedProfiles(prev => prev.map(p => p.id === prof.id ? { ...p, pdfData: null, pdfFileName: null, pdfStoragePath: null } : p));
-                              if (path) { try { await deleteReport(path); } catch (e) { console.error('delete report', e); } }
-                            }}>✕</button>
-                        </div>
-                      ) : (
-                        <label className={`pm-pdf-upload${parsingPDFForProfile === prof.id ? ' parsing' : ''}`}
-                          onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
-                          onDragLeave={e => e.currentTarget.classList.remove('drag-over')}
-                          onDrop={e => {
-                            e.preventDefault();
-                            e.currentTarget.classList.remove('drag-over');
-                            const f = e.dataTransfer.files[0];
-                            if (f) handleProfilePDFUpload(prof.id, f);
-                          }}
-                        >
-                          <input type="file" accept=".pdf" style={{ display: 'none' }}
-                            onChange={e => {
-                              const f = e.target.files[0];
-                              if (f) handleProfilePDFUpload(prof.id, f);
-                              e.target.value = '';
-                            }}
-                          />
-                          {parsingPDFForProfile === prof.id ? (
-                            <span className="pm-pdf-parsing">
-                              <span className="pm-pdf-spin">⟳</span> Parsing PDF — extracting Ashtakvarga, Dasha, KP data…
-                            </span>
-                          ) : (
-                            <>
-                              <span className="pm-pdf-upload-icon">📤</span>
-                              <span className="pm-pdf-upload-text">
-                                Drop AstroSage Kundli PDF here or <u>click to upload</u>
-                                <br />
-                                <small>Unlocks Ashtakvarga scoring · Pratyantar timing · KP Lords · Shadbala · Sadesati</small>
-                              </span>
-                            </>
-                          )}
-                        </label>
-                      )}
-                      {pdfParseError && parsingPDFForProfile === null && (
-                        <div className="pm-pdf-error">{pdfParseError}</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   // ── Auth gate ───────────────────────────────────────────────────────────
   // While the session is resolving, show a minimal splash. If configured and
   // not signed in, show the register/login screen instead of the app.
@@ -1977,25 +1301,30 @@ function App() {
     return <AuthScreen />;
   }
 
-  // Small magnifier button overlaid on each chart; opens the enlarge modal.
-  const zoomBtn = (id) => (
-    <button type="button" className="chart-zoom-btn" title="Enlarge chart" aria-label="Enlarge chart"
-      onClick={() => setZoomId(id)}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-        <line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" />
-      </svg>
-    </button>
-  );
-
   return (
     <div className="app-container">
       {/* Profile Manager Modal */}
-      {renderProfileManagerModal()}
+      <ProfileManagerModal
+        showProfileManager={showProfileManager} setShowProfileManager={setShowProfileManager}
+        editingProfileId={editingProfileId} setEditingProfileId={setEditingProfileId}
+        profileForm={profileForm} setProfileForm={setProfileForm}
+        savedProfiles={savedProfiles} setSavedProfiles={setSavedProfiles}
+        activeProfileId={activeProfileId} setActiveProfileId={setActiveProfileId}
+        birthDetails={birthDetails} lifeEvents={lifeEvents}
+        handleExportProfiles={handleExportProfiles} handleImportProfiles={handleImportProfiles}
+        handleLoadProfile={handleLoadProfile} handleUpdateActiveProfileData={handleUpdateActiveProfileData}
+        handleDuplicateProfile={handleDuplicateProfile} handleDeleteProfile={handleDeleteProfile}
+        handleProfilePDFUpload={handleProfilePDFUpload} parsingPDFForProfile={parsingPDFForProfile}
+        pdfParseError={pdfParseError} downloadingReport={downloadingReport} handleDownloadReport={handleDownloadReport}
+      />
 
       {/* Cloud Sync Settings Modal */}
-      {renderSyncSettingsModal()}
-
+      <SyncSettingsModal
+        showSyncSettings={showSyncSettings} setShowSyncSettings={setShowSyncSettings}
+        syncForm={syncForm} setSyncForm={setSyncForm}
+        syncError={syncError} syncStatus={syncStatus} syncConnecting={syncConnecting}
+        handleSyncConnect={handleSyncConnect} handleSyncDisconnect={handleSyncDisconnect}
+      />
       {/* First-run guided tour */}
       {showGuide && (
         <GuideTour tabs={TABS} isAdmin={isAdmin} onClose={closeGuide} onFinish={finishGuide} />
@@ -2023,7 +1352,7 @@ function App() {
                 <button className="chart-zoom-nav" disabled={idx <= 0}
                   onClick={() => setZoomId(allCharts[idx - 1].id)} aria-label="Previous chart">‹</button>
                 <div className="chart-zoom-svg">
-                  {renderNorthIndianChart(cur.planets, cur.lagnaSign)}
+                  <KundaliChart planets={cur.planets} lagnaSign={cur.lagnaSign} />
                 </div>
                 <button className="chart-zoom-nav" disabled={idx >= allCharts.length - 1}
                   onClick={() => setZoomId(allCharts[idx + 1].id)} aria-label="Next chart">›</button>
@@ -2033,7 +1362,6 @@ function App() {
           </div>
         );
       })()}
-
       {/* Header Banner */}
       <header className="app-header">
         <div className="header-inner">
@@ -2079,6 +1407,11 @@ function App() {
               ☁ {syncStatus === 'off' ? 'Sync' : syncStatus === 'error' ? 'Error' : syncStatus === 'synced' ? 'Synced' : '…'}
             </button>
             )}
+            <button
+              className="theme-toggle"
+              onClick={handleShareChart}
+              title="Copy a read-only link to the current birth chart"
+            >⤴ {shareFlash ? 'Link copied!' : 'Share'}</button>
             <button className="header-profile-btn" onClick={() => { setProfileForm({ name: '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' }); setEditingProfileId(null); setShowProfileManager(true); }}>
               ⊙ Profiles {savedProfiles.length > 0 && <span className="header-profile-count">{savedProfiles.length}</span>}
             </button>
@@ -2094,6 +1427,11 @@ function App() {
                     <div style={{ position: 'fixed', inset: 0, zIndex: 55 }} onClick={() => setShowUserMenu(false)} />
                     <div className="user-pop">
                       <div className="user-pop-email">Signed in as<br /><strong>{user.email}</strong></div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', cursor: 'pointer', borderTop: '1px solid rgba(139,92,246,0.15)' }}
+                        title="Get a weekly email when a significant transit window is approaching (requires server email setup)">
+                        <input type="checkbox" checked={alertsEnabled} onChange={e => setAlertsEnabled(e.target.checked)} />
+                        Email transit alerts <span style={{ opacity: 0.6 }}>(beta)</span>
+                      </label>
                       <button className="user-pop-signout" onClick={handleSignOut}>Sign Out</button>
                     </div>
                   </>
@@ -2145,6 +1483,18 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Shared-chart banner */}
+      {sharedChartActive && (
+        <div style={{ maxWidth: '1400px', margin: '10px auto 0', padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(234,179,8,0.4)', background: 'rgba(234,179,8,0.08)', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
+          <span>👁</span>
+          <span style={{ flex: 1 }}>
+            Viewing a <strong>shared chart</strong>{birthDetails.name ? <> — <strong>{birthDetails.name}</strong></> : null}.
+            Nothing is saved to your profiles unless you press “Prepare Chart &amp; Save Profile”.
+          </span>
+          <button className="pm-close" onClick={() => setSharedChartActive(false)} aria-label="Dismiss">✕</button>
+        </div>
+      )}
 
       {/* Main Grid: Left Controls, Right Display */}
       <main className="dashboard-layout" style={{ gridTemplateColumns: birthFormCollapsed ? '48px 1fr' : '380px 1fr', transition: 'grid-template-columns 0.3s ease' }}>
@@ -2369,7 +1719,7 @@ function App() {
           <div className="separator"></div>
 
           {/* Empty state when no chart has been generated yet */}
-          {!natalChart && activeTab !== 'historical-transits' && (
+          {!natalChart && !['historical-transits', 'panchanga', 'compatibility'].includes(activeTab) && (
             <div className="empty-state">
               <span className="empty-state-icon">☉</span>
               <h3>No Birth Chart Yet</h3>
@@ -2384,1625 +1734,77 @@ function App() {
             </div>
           )}
 
-          {/* TAB CONTENT 1: Birth Details & Trik Bhava Analysis */}
-          {activeTab === 'birth-chart' && natalChart && (
-            <div className="tab-content-fade">
-              <div className="birth-summary-row">
-                <h3 className="tab-section-title">Birth Analysis of {birthDetails.name}</h3>
-                <span className="info-badge">Lahiri Ayanamsha: {formatDegrees(natalChart.ayanamsha)}</span>
-              </div>
 
-              {/* At-a-glance summary strip */}
-              {(() => {
-                const moon = natalChart.planets.moon;
-                const sun = natalChart.planets.sun;
-                const { currentMahadasha, currentAntardasha } = dashaData
-                  ? getCurrentDasha(dashaData, new Date())
-                  : { currentMahadasha: null, currentAntardasha: null };
-                return (
-                  <div className="glance-strip">
-                    <div className="glance-chip">
-                      <span className="glance-icon">↑</span>
-                      <div className="glance-body">
-                        <div className="glance-label">Lagna (Asc)</div>
-                        <div className="glance-value">{SIGNS[natalChart.lagnaSign].name}</div>
-                        <div className="glance-sub">{SIGNS[natalChart.lagnaSign].sanskrit} · {formatDegrees(natalChart.lagnaDegree)}</div>
-                      </div>
-                    </div>
-                    {moon && (
-                      <div className="glance-chip">
-                        <span className="glance-icon">☽</span>
-                        <div className="glance-body">
-                          <div className="glance-label">Moon Sign</div>
-                          <div className="glance-value">{moon.signName}</div>
-                          <div className="glance-sub">{moon.nakshatraName} · Pada {moon.pada}</div>
-                        </div>
-                      </div>
-                    )}
-                    {sun && (
-                      <div className="glance-chip">
-                        <span className="glance-icon">☉</span>
-                        <div className="glance-body">
-                          <div className="glance-label">Sun Sign</div>
-                          <div className="glance-value">{sun.signName}</div>
-                          <div className="glance-sub">{sun.nakshatraName}</div>
-                        </div>
-                      </div>
-                    )}
-                    {currentMahadasha && (
-                      <div
-                        className="glance-chip clickable"
-                        onClick={() => setActiveTab('dasha-system')}
-                        title="Open the full Vimshottari Dasha timeline"
-                      >
-                        <span className="glance-icon">⏳</span>
-                        <div className="glance-body">
-                          <div className="glance-label">Running Dasha</div>
-                          <div className="glance-value">
-                            {currentMahadasha.lord}{currentAntardasha ? ` / ${currentAntardasha.lord}` : ''}
-                          </div>
-                          <div className="glance-sub">
-                            Until {currentMahadasha.endDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short' })} →
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Table of Planet Positions matching Astro-Sage Grid style */}
-              <div className="table-responsive">
-                <table className="planetary-table">
-                  <thead>
-                    <tr>
-                      <th>Planet</th>
-                      <th>Zodiac Sign</th>
-                      <th>Sanskrit Sign</th>
-                      <th>Longitude</th>
-                      <th>Dignity</th>
-                      <th>Retrograde</th>
-                      <th>Nakshatra</th>
-                      <th>Pada</th>
-                      <th>Nakshatra Lord</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* Ascendant details as first row */}
-                    <tr>
-                      <td><strong>Ascendant (Lagna)</strong></td>
-                      <td>{SIGNS[natalChart.lagnaSign].name}</td>
-                      <td>{SIGNS[natalChart.lagnaSign].sanskrit}</td>
-                      <td>{formatDegrees(natalChart.lagnaDegree)}</td>
-                      <td>--</td>
-                      <td>--</td>
-                      <td>{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].name}</td>
-                      <td>{Math.floor(((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) % 13.333333) / 3.333333) + 1}</td>
-                      <td>{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].lord}</td>
-                    </tr>
-                    {/* Planet positions rows */}
-                    {Object.keys(natalChart.planets).map(key => {
-                      const p = natalChart.planets[key];
-                      const dignity = getPlanetDignity(p.id, p.signIndex);
-                      const dignityLabel = dignity === 'exalted' ? '⬆ Exalted' : dignity === 'debilitated' ? '⬇ Debilitated' : dignity === 'own' ? '✦ Own Sign' : '—';
-                      const dignityClass = dignity === 'exalted' ? 'dignity-exalted' : dignity === 'debilitated' ? 'dignity-debilitated' : dignity === 'own' ? 'dignity-own' : '';
-                      return (
-                        <tr key={p.id}>
-                          <td>{PLANET_NAMES[p.id]}</td>
-                          <td>{p.signName}</td>
-                          <td>{p.signSanskrit}</td>
-                          <td>{formatDegrees(p.degree)}</td>
-                          <td><span className={dignityClass}>{dignityLabel}</span></td>
-                          <td>{p.retrograde ? <span className="retrograde-indicator">Yes (R)</span> : 'No'}</td>
-                          <td>{p.nakshatraName}</td>
-                          <td>{p.pada}</td>
-                          <td>{p.nakshatraLord}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* ✨ AI Reading (Cloudflare Workers AI) */}
-              <AIReading summary={chartSummary} disabled={!chartSummary} />
-
-              {/* Trik Bhava Commentary and Yogas Section */}
-              {trikBhavaAnalysis && (
-                <div className="trik-analysis-block">
-                  <h3 className="tab-section-title spacing-top">Trik Bhava & Karmic Shadow Analysis</h3>
-                  <p className="karmic-disclaimer">
-                    Based on <em>Brihat Parashara Hora Shastra</em> and the karmic-psychological teachings of 
-                    Pandit Krishna Ashant's <em>Trik Bhavo Ki Gatha</em>. Focusing on the challenges, transformations, 
-                    and expenditures of the 6th, 8th, and 12th houses.
-                  </p>
-
-                  {/* Active Yogas */}
-                  {trikBhavaAnalysis.yogas.length > 0 && (
-                    <div className="yogas-list">
-                      <h4 className="card-subtitle font-gold">Formed Vipareeta Raja Yogas</h4>
-                      {trikBhavaAnalysis.yogas.map((yoga, i) => (
-                        <div key={i} className="yoga-card alert-card">
-                          <strong>{yoga.name}</strong>: {yoga.description}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* House Commentary Grid */}
-                  <div className="trik-commentary-grid">
-                    <div className="trik-card glass-subcard">
-                      <div className="trik-card-header">
-                        <span className="card-badge bg-6">6th House</span>
-                        <h4>Shatru, Roga, Rina (Struggles & Healing)</h4>
-                      </div>
-                      <p className="trik-detail-text">
-                        <strong>6th Lord ({trikBhavaAnalysis.placements[6].lord.toUpperCase()})</strong> resides in the{' '}
-                        <strong>{trikBhavaAnalysis.placements[6].placedHouse} House</strong> ({trikBhavaAnalysis.placements[6].placedSignName}).
-                      </p>
-                      <p className="trik-body-text">
-                        {DUSTHANA_INTERPRETATIONS.lord6[trikBhavaAnalysis.placements[6].placedHouse]}
-                      </p>
-                    </div>
-
-                    <div className="trik-card glass-subcard">
-                      <div className="trik-card-header">
-                        <span className="card-badge bg-8">8th House</span>
-                        <h4>Ayu, Randhra (Secret transformations & Occult)</h4>
-                      </div>
-                      <p className="trik-detail-text">
-                        <strong>8th Lord ({trikBhavaAnalysis.placements[8].lord.toUpperCase()})</strong> resides in the{' '}
-                        <strong>{trikBhavaAnalysis.placements[8].placedHouse} House</strong> ({trikBhavaAnalysis.placements[8].placedSignName}).
-                      </p>
-                      <p className="trik-body-text">
-                        {DUSTHANA_INTERPRETATIONS.lord8[trikBhavaAnalysis.placements[8].placedHouse]}
-                      </p>
-                    </div>
-
-                    <div className="trik-card glass-subcard">
-                      <div className="trik-card-header">
-                        <span className="card-badge bg-12">12th House</span>
-                        <h4>Vyaya, Moksha (Losses, Sleep, Dissolution)</h4>
-                      </div>
-                      <p className="trik-detail-text">
-                        <strong>12th Lord ({trikBhavaAnalysis.placements[12].lord.toUpperCase()})</strong> resides in the{' '}
-                        <strong>{trikBhavaAnalysis.placements[12].placedHouse} House</strong> ({trikBhavaAnalysis.placements[12].placedSignName}).
-                      </p>
-                      <p className="trik-body-text">
-                        {DUSTHANA_INTERPRETATIONS.lord12[trikBhavaAnalysis.placements[12].placedHouse]}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Current Dasha Summary Banner */}
-              {dashaData && (() => {
-                const { currentMahadasha, currentAntardasha } = getCurrentDasha(dashaData, new Date());
-                if (!currentMahadasha) return null;
-                const mEnd = currentMahadasha.endDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
-                const adEnd = currentAntardasha ? currentAntardasha.endDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long' }) : '';
-                return (
-                  <div className="dasha-banner glass-subcard spacing-top" style={{ borderLeft: '3px solid var(--accent-gold)', padding: '14px 18px', display: 'flex', flexWrap: 'wrap', gap: '18px', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '3px' }}>Current Mahadasha</div>
-                      <div style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--accent-gold)', textTransform: 'capitalize' }}>{currentMahadasha.lord} Dasha</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Ends {mEnd} · {DASHA_YEARS[currentMahadasha.lord]} yr period</div>
-                    </div>
-                    {currentAntardasha && (
-                      <div style={{ borderLeft: '1px solid rgba(139,92,246,0.3)', paddingLeft: '18px' }}>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '3px' }}>Current Antardasha</div>
-                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--accent-violet)', textTransform: 'capitalize' }}>{currentAntardasha.lord} Antardasha</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Ends {adEnd}</div>
-                      </div>
-                    )}
-                    <div style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)' }}>
-                      → See full timeline in <strong style={{ color: 'var(--accent-violet)', cursor: 'pointer' }} onClick={() => setActiveTab('dasha-system')}>Vimshottari Dasha</strong> tab
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
-
-          {/* TAB CONTENT 2: Interactive North Indian Chart (Kundali) */}
-          {activeTab === 'interactive-chart' && natalChart && (
-            <div className="tab-content-fade">
-              <h3 className="tab-section-title">Vedic Chart Layout (Kundali)</h3>
-              
-              <div className="chart-comparison-view">
-                
-                {/* Natal Chart Column */}
-                <div className="chart-column">
-                  <h4 className="chart-column-title">Lagna / Birth Chart</h4>
-                  <div className="chart-svg-container">
-                    {zoomBtn('natal')}
-                    {renderNorthIndianChart(natalChart.planets, natalChart.lagnaSign)}
-                  </div>
-                  <p className="chart-description">
-                    Lagna: <strong>{SIGNS[natalChart.lagnaSign].name}</strong> ({formatDegrees(natalChart.lagnaDegree)})
-                  </p>
-                </div>
-
-                {/* Transit Chart Column */}
-                <div className="chart-column">
-                  <h4 className="chart-column-title font-purple">Transit Chart</h4>
-                  <div className="chart-svg-container">
-                    {transitChart && zoomBtn('transit')}
-                    {transitChart && renderNorthIndianChart(transitChart.planets, natalChart.lagnaSign, true)}
-                  </div>
-                  <p className="chart-description" style={{ minHeight: '2.8em' }}>
-                    {transitDragInfo
-                      ? <span style={{ color:'var(--accent-gold)', fontWeight:700 }}>
-                          ⟳ Dragging <em>{transitDragInfo.planetId}</em> — {transitDateInput} {transitTimeInput} UTC
-                        </span>
-                      : <>Transit Date: <strong>{transitDateInput}</strong> {transitTimeInput} UTC
-                          <br/><span style={{ fontSize:'11px', opacity:0.6 }}>Drag any planet to scrub time</span></>
-                    }
-                  </p>
-                </div>
-              </div>
-
-              {/* Divisional charts (Vargas) */}
-              {vargaCharts.length > 0 && (
-                <div className="varga-section glass-subcard">
-                  <h4 className="card-subtitle">Divisional Charts (Vargas)</h4>
-                  <p className="section-description">
-                    Harmonic sub-charts derived from your sidereal positions — each magnifies a
-                    specific area of life. Lagna and planets are re-mapped per the Parashari method.
-                  </p>
-                  <div className="varga-grid">
-                    {vargaCharts.map(v => (
-                      <div key={v.id} className="varga-cell">
-                        <div className="varga-cell-title">{v.label}</div>
-                        <div className="chart-svg-container varga-svg">
-                          {zoomBtn(v.id)}
-                          {renderNorthIndianChart(v.planets, v.lagnaSign)}
-                        </div>
-                        <div className="varga-cell-sub">Lagna: <strong>{SIGNS[v.lagnaSign].name}</strong></div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Slider for real-time transit scrubbing */}
-              <div className="transit-slider-controls glass-subcard">
-                <h4 className="card-subtitle">Real-Time Transit Scrubber</h4>
-                
-                <div className="slider-row">
-                  <div className="input-group flex-1">
-                    <label htmlFor="transitDate" className="input-label">Transit Date</label>
-                    <input
-                      type="date"
-                      id="transitDate"
-                      value={transitDateInput}
-                      onChange={(e) => setTransitDateInput(e.target.value)}
-                      className="text-input"
-                    />
-                  </div>
-                  <div className="input-group flex-1">
-                    <label htmlFor="transitTime" className="input-label">Transit Time (UTC)</label>
-                    <input
-                      type="time"
-                      id="transitTime"
-                      value={transitTimeInput}
-                      onChange={(e) => setTransitTimeInput(e.target.value)}
-                      className="text-input"
-                    />
-                  </div>
-                  <div className="input-group flex-1 checkbox-group">
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={showNakshatras}
-                        onChange={(e) => setShowNakshatras(e.target.checked)}
-                      />
-                      Show Nakshatras
-                    </label>
-                  </div>
-                </div>
-
-                {/* Timeline scrubber: direct date control, monthly precision, 1950–2060 */}
-                <div className="scrubber-range-container">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                    <label htmlFor="yearScrubber" className="input-label" style={{ marginBottom: 0 }}>
-                      Timeline Scrubber
-                    </label>
-                    <span style={{ fontSize: '12px', color: 'var(--accent-gold)', fontWeight: 'bold' }}>
-                      {new Date(`${transitDateInput}T12:00:00Z`).toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    id="yearScrubber"
-                    min="1950"
-                    max="2060"
-                    step="0.0833"
-                    value={(() => {
-                      const d = new Date(`${transitDateInput}T12:00:00Z`);
-                      return d.getFullYear() + d.getMonth() / 12;
-                    })()}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value);
-                      const year = Math.floor(val);
-                      const month = Math.round((val - year) * 12);
-                      const d = new Date(Date.UTC(year, month, 1));
-                      setTransitDateInput(d.toISOString().split('T')[0]);
-                    }}
-                    className="range-scrubber"
-                  />
-                  <div className="scrubber-legend">
-                    <span>1950</span>
-                    <span>2005</span>
-                    <span>2060</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Transit Nakshatra Info if enabled */}
-              {showNakshatras && transitChart && (
-                <div className="nakshatra-explorer glass-subcard spacing-top">
-                  <h4 className="card-subtitle">Transit Nakshatra Coordinates</h4>
-                  <div className="nakshatra-grid">
-                    {Object.keys(transitChart.planets).map(key => {
-                      const p = transitChart.planets[key];
-                      const nLord = p.nakshatraLord;
-                      const nPada = p.pada;
-                      const nName = p.nakshatraName;
-                      
-                      return (
-                        <div key={p.id} className="nak-badge">
-                          <strong>{p.name}</strong>: {nName} (Pada {nPada})
-                          <br />
-                          <small className="font-gold">Ruler: {nLord}</small>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB CONTENT 3: Historical Transit Explorer */}
-          {activeTab === 'historical-transits' && (
-            <div className="tab-content-fade">
-              <h3 className="tab-section-title">Sign Transits Lookup (1976 - 2026)</h3>
-              <p className="tab-instructions">
-                Scan when the slow-moving planetary bodies (Saturn, Jupiter, Rahu, Ketu) changed zodiac signs during the last 50 years.
-              </p>
-
-              <div className="transit-selector-row glass-subcard">
-                <div className="input-group">
-                  <label htmlFor="transitPlanet" className="input-label">Select Planet</label>
-                  <select
-                    id="transitPlanet"
-                    value={selectedTransitPlanet}
-                    onChange={(e) => setSelectedTransitPlanet(e.target.value)}
-                    className="text-input"
-                  >
-                    <option value="saturn">Saturn (Shani) - Slow transit ~2.5 yrs per sign</option>
-                    <option value="jupiter">Jupiter (Guru) - Mid transit ~1 yr per sign</option>
-                    <option value="rahu">Rahu (North Node) - Nodes transit ~1.5 yrs per sign</option>
-                    <option value="ketu">Ketu (South Node) - Nodes transit ~1.5 yrs per sign</option>
-                  </select>
-                </div>
-                <button
-                  onClick={handleScanHistoricalTransits}
-                  className="btn btn-primary"
-                  disabled={scanningTransits}
-                >
-                  {scanningTransits ? 'Scanning...' : 'Scan 50 Years'}
-                </button>
-              </div>
-
-              {/* Transit results */}
-              {historicalTransits.length > 0 && (
-                <div className="historical-results-list">
-                  <h4 className="card-subtitle">Found {historicalTransits.length} Transit Sign Changes</h4>
-                  <div className="table-responsive">
-                    <table className="transit-results-table">
-                      <thead>
-                        <tr>
-                          <th>Date of Transit</th>
-                          <th>Left Sign</th>
-                          <th>Entered Sign</th>
-                          <th>Sign Element</th>
-                          <th>Sign Quality</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {historicalTransits.map((tr, index) => {
-                          const toSign = SIGNS.find(s => s.name === tr.toSignName);
-                          return (
-                            <tr key={index}>
-                              <td><strong>{new Date(tr.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</strong></td>
-                              <td className="text-muted">{tr.fromSignName} ({SIGNS[tr.fromSign].sanskrit})</td>
-                              <td className="text-highlight">{tr.toSignName} ({SIGNS[tr.toSign].sanskrit})</td>
-                              <td>{toSign ? toSign.element : ''}</td>
-                              <td>{toSign ? toSign.nature : ''}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB CONTENT 4: Life Events Matcher & Predictions */}
-          {activeTab === 'predictions' && natalChart && (
-            <div className="tab-content-fade">
-              <h3 className="tab-section-title">Life Events Transit Analytics Matcher</h3>
-              <p className="tab-instructions">
-                Log major events in your life (marriage, relocations, career changes, illnesses) to map the planetary transit signature during that time.
-                The engine will identify similar future transits of Saturn, Jupiter, Rahu, and Ketu between 2026 and 2056, calculating a similarity score, and analyzing your birth chart potential.
-              </p>
-
-              {/* ── ACCURACY ENGINE PANEL ── */}
-              {(() => {
-                const acc = getAccuracyProfile(activePDFData);
-                const today = new Date();
-                const pratantar = activePDFData ? getActivePratyantar(activePDFData, today) : null;
-                const sadesati = activePDFData ? getActiveSadesati(activePDFData, today) : null;
-                return (
-                  <div className="accuracy-panel glass-subcard spacing-bottom">
-                    <div className="acc-header">
-                      <div className="acc-title">⚡ Prediction Accuracy Engine</div>
-                      <div className="acc-score-row">
-                        <div className="acc-bar-track">
-                          <div className="acc-bar-fill acc-base" style={{ width: `${acc.base}%` }} title={`Base: ${acc.base}%`} />
-                          <div className="acc-bar-fill acc-earned" style={{ width: `${acc.earned}%`, marginLeft: `${acc.base}%` }} title={`PDF boost: +${acc.earned}%`} />
-                        </div>
-                        <span className="acc-score-num">{acc.total}<span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>/{acc.max}%</span></span>
-                      </div>
-                    </div>
-
-                    {/* Data sources grid */}
-                    <div className="acc-sources">
-                      <div className={`acc-source active`}>
-                        <span className="acc-src-dot green" />Transit Positions
-                      </div>
-                      <div className={`acc-source active`}>
-                        <span className="acc-src-dot green" />Mahadasha / Antardasha
-                      </div>
-                      <div className={`acc-source active`}>
-                        <span className="acc-src-dot green" />Trik Bhava Analysis
-                      </div>
-                      {acc.breakdown.map(b => (
-                        <div key={b.key} className={`acc-source${b.active ? ' active' : ' locked'}`}>
-                          <span className={`acc-src-dot${b.active ? ' green' : ' grey'}`} />
-                          {b.label}
-                          {b.active && <span className="acc-src-plus">+{b.points}%</span>}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Active Pratyantar & Sadesati */}
-                    {(pratantar || sadesati) && (
-                      <div className="acc-live-row">
-                        {pratantar && (
-                          <div className="acc-live-chip">
-                            <span className="acc-live-label">Pratyantar Now</span>
-                            <strong style={{ textTransform: 'capitalize' }}>
-                              {pratantar.maha} › {pratantar.antar} › {pratantar.pratantar}
-                            </strong>
-                            <span className="acc-live-dates">
-                              ends {pratantar.endDate instanceof Date ? pratantar.endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-                            </span>
-                          </div>
-                        )}
-                        {sadesati && (
-                          <div className={`acc-live-chip sadesati-${sadesati.phase?.toLowerCase() || 'active'}`}>
-                            <span className="acc-live-label">Sadesati</span>
-                            <strong>{sadesati.type} — {sadesati.phase || ''} Phase</strong>
-                            <span className="acc-live-dates">{sadesati.sign} · ends {sadesati.endDate instanceof Date ? sadesati.endDate.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : ''}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Unlock suggestions when no PDF */}
-                    {!activePDFData && (
-                      <div className="acc-unlock-row">
-                        <span className="acc-unlock-icon">🔓</span>
-                        <div className="acc-unlock-text">
-                          <strong>Upload an AstroSage PDF to this profile</strong> to unlock Ashtakvarga bindu scoring,
-                          Pratyantar-level timing (±2 week precision), KP sub-lord event triggers, Shadbala-weighted dashas and Sadesati overlays.
-                          <br /><em style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Open ⊙ Profiles → select this profile → drop PDF in the upload zone</em>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* ── UPCOMING TRANSIT WINDOWS (auto-computed) ── */}
-              <div className="upcoming-windows-panel glass-subcard spacing-bottom">
-                <div className="uw-header">
-                  <div className="uw-title">
-                    🔮 Upcoming Transit Windows
-                    <span className="uw-subtitle">auto-scanned from {lifeEvents.length} life events · past analogs & upcoming</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {autoMatchesComputed && !autoMatchesLoading && (
-                      <button className="uw-refresh-btn" onClick={() => { setAutoMatchesKey(null); setAutoMatches([]); setExpandedAutoMatch(null); }}>
-                        ↻ Refresh
-                      </button>
-                    )}
-                    {autoMatchesLoading && <span className="uw-scanning-text">⟳ Scanning all events…</span>}
-                  </div>
-                </div>
-
-                {autoMatchesLoading && (
-                  <div className="uw-loading">
-                    <div className="uw-loading-bar" />
-                    <span>Computing transit signatures for {lifeEvents.length} life events across {new Date().getFullYear()}–{new Date().getFullYear()+3}…</span>
-                  </div>
-                )}
-
-                {autoMatchesComputed && !autoMatchesLoading && autoMatches.length === 0 && (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '12px 0' }}>
-                    No matching transit windows (past or upcoming) found. Try adding more life events.
-                  </p>
-                )}
-
-                {autoMatchesComputed && !autoMatchesLoading && autoMatches.length > 0 && (
-                  <div className="uw-list">
-                    {autoMatches.map((match, idx) => {
-                      const enhanced = enhanceTransitWithPDFData(match, activePDFData);
-                      const isExpanded = expandedAutoMatch === idx;
-                      const today = new Date();
-                      const peakDate = match.peakDate instanceof Date ? match.peakDate : new Date(match.peakDate);
-                      const startDate = match.startDate instanceof Date ? match.startDate : new Date(match.startDate);
-                      const endDate = match.endDate instanceof Date ? match.endDate : new Date(match.endDate);
-                      const daysToStart = Math.ceil((startDate.getTime() - today.getTime()) / 86400000);
-                      const isNow = today >= startDate && today <= endDate;
-                      const isThisMonth = !isNow && daysToStart >= 0 && daysToStart <= 35;
-                      const isNextMonth = !isNow && !isThisMonth && daysToStart > 35 && daysToStart <= 70;
-                      const isPast = match._group === 'past' || endDate.getTime() < today.getTime();
-                      const monthsAgo = Math.round((today.getTime() - endDate.getTime()) / (30.4 * 86400000));
-                      const pastAgoLabel = monthsAgo >= 12 ? `${Math.round(monthsAgo/12)}y ago` : `${Math.max(1, monthsAgo)}mo ago`;
-                      const grp = match._group;
-                      const showGroupHeader = idx === 0 || autoMatches[idx - 1]._group !== grp;
-
-                      const { currentMahadasha, currentAntardasha } = dashaData
-                        ? getCurrentDasha(dashaData, peakDate) : {};
-
-                      const peakPratantar = activePDFData ? getActivePratyantar(activePDFData, peakDate) : null;
-                      const peakSadesati = activePDFData ? getActiveSadesati(activePDFData, peakDate) : null;
-                      const peakAlignments = (() => {
-                        try { return analyzePeakDateAlignments(peakDate, natalChart.planets, natalChart.lagnaSign); }
-                        catch { return []; }
-                      })();
-
-                      return (
-                        <Fragment key={idx}>
-                        {showGroupHeader && (
-                          <div className={`uw-group-header ${grp === 'past' ? 'uw-group-past' : 'uw-group-upcoming'}`}>
-                            {grp === 'past' ? '↩ Past similar transits (already occurred)' : '🔮 Upcoming windows'}
-                          </div>
-                        )}
-                        <div className={`uw-item${isExpanded ? ' expanded' : ''}${isNow ? ' uw-now' : ''}${isPast ? ' uw-past' : ''}`}>
-                          {/* ── Window Header ── */}
-                          <div className="uw-item-header" onClick={() => setExpandedAutoMatch(isExpanded ? null : idx)}>
-                            <div className="uw-item-left">
-                              {/* Time badge */}
-                              {isPast && <span className="uw-badge uw-badge-past">↩ {pastAgoLabel}</span>}
-                              {isNow && <span className="uw-badge uw-badge-now">● NOW</span>}
-                              {isThisMonth && <span className="uw-badge uw-badge-soon">This Month</span>}
-                              {isNextMonth && <span className="uw-badge uw-badge-next">Next Month</span>}
-                              {!isNow && !isThisMonth && !isNextMonth && daysToStart > 0 && (
-                                <span className="uw-badge uw-badge-future">In {Math.ceil(daysToStart/30)}mo</span>
-                              )}
-
-                              {/* Date range */}
-                              <span className="uw-date-range">
-                                <strong>{startDate.toLocaleDateString(undefined, { month:'short', year:'numeric' })}</strong>
-                                {' – '}
-                                <strong>{endDate.toLocaleDateString(undefined, { month:'short', year:'numeric' })}</strong>
-                              </span>
-
-                              {/* Match scores */}
-                              <span className="uw-score">{match.score}%</span>
-                              {enhanced.adjustedScore !== match.score && activePDFData?.ashtakvarga && (
-                                <span className="uw-score adjusted">{enhanced.adjustedScore}%▲</span>
-                              )}
-                              {peakSadesati && (
-                                <span className={`sadesati-chip phase-${peakSadesati.phase?.toLowerCase() || 'active'}`}>
-                                  ☄ {peakSadesati.phase}
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="uw-item-right">
-                              {/* Reference event */}
-                              <span className={`event-category-badge cat-${(match.referenceEvent.category || 'career').toLowerCase()}`}>
-                                {match.referenceEvent.category}
-                              </span>
-                              <span className="uw-ref-name">
-                                {match.referenceEvent.name.slice(0, 45)}{match.referenceEvent.name.length > 45 ? '…' : ''}
-                                <span className="uw-ref-year">
-                                  ({new Date(match.referenceEvent.startDate).getFullYear()})
-                                </span>
-                              </span>
-                              <span className="uw-chevron">{isExpanded ? '▲' : '▼'}</span>
-                            </div>
-                          </div>
-
-                          {/* ── Quick summary strip ── */}
-                          <div className="uw-summary-strip">
-                            {/* Transit houses */}
-                            <div className="uw-transits-row">
-                              {Object.entries(match.transits || {}).map(([p, t]) => (
-                                <span key={p} className="uw-transit-chip">
-                                  <span style={{ textTransform: 'capitalize', fontWeight: 700 }}>{p.slice(0,3)}</span>
-                                  <span>H{t.house}</span>
-                                </span>
-                              ))}
-                            </div>
-                            {/* Dasha */}
-                            {currentMahadasha && (
-                              <div className="uw-dasha-row">
-                                <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Dasha: </span>
-                                <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{currentMahadasha.lord}</span>
-                                {currentAntardasha && <span style={{ color: 'var(--text-muted)' }}> › {currentAntardasha.lord}</span>}
-                                {peakPratantar && <span style={{ color: 'var(--cyan)', fontSize: '10px' }}> › {peakPratantar.pratantar}</span>}
-                              </div>
-                            )}
-                            {/* Bindu scores if PDF */}
-                            {activePDFData?.ashtakvarga && enhanced.binduScores && (
-                              <div className="uw-bindu-row">
-                                {Object.entries(enhanced.binduScores).map(([planet, scores]) => {
-                                  const bl = binduLabel(scores.bindu);
-                                  if (!bl) return null;
-                                  return (
-                                    <span key={planet} className="bindu-chip" style={{ borderColor: bl.color, color: bl.color, fontSize: '10px', padding: '1px 6px' }}>
-                                      {planet.slice(0,3)} {scores.bindu}/8
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* ── Expanded full report ── */}
-                          {isExpanded && (
-                            <div className="uw-expanded-body">
-                              {/* Section 1: Transit Data */}
-                              <div className="prediction-body-grid" style={{ borderTop: '1px solid var(--border-gold)', paddingTop: '14px' }}>
-                                <div className="prediction-section border-right">
-                                  <h5 className="prediction-sec-title">Transit Positions at Peak ({peakDate.toLocaleDateString(undefined, { month:'long', day:'numeric', year:'numeric' })})</h5>
-                                  <ul className="details-list">
-                                    {Object.entries(match.transits || {}).map(([key, tInfo]) => {
-                                      const origInfo = match.originalSignature?.eventSignature?.[key];
-                                      return (
-                                        <li key={key} className={origInfo && tInfo.house === origInfo.house ? 'exact-match' : ''}>
-                                          <strong>{key.toUpperCase()}</strong>: House {tInfo.house} ({SIGNS[tInfo.signIndex]?.name})
-                                          {origInfo && <><br /><small className="text-muted">(Past: House {origInfo.house} in {SIGNS[origInfo.signIndex]?.name})</small></>}
-                                        </li>
-                                      );
-                                    })}
-                                  </ul>
-                                </div>
-
-                                <div className="prediction-section">
-                                  <h5 className="prediction-sec-title font-purple">Trik Bhava & Natal Potential</h5>
-                                  <div className="commentary-scroll">
-                                    {match.trikCommentaries.map((com, ci) => (
-                                      <div key={ci} className="trik-commentary-item">
-                                        <h6 className="commentary-item-title font-gold">{com.title}</h6>
-                                        <p className="commentary-item-text">{com.text}</p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                {/* Section 3: Degree alignments */}
-                                {peakAlignments.length > 0 && (
-                                  <div style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--border-gold)', paddingTop: '12px' }}>
-                                    <h5 className="prediction-sec-title font-gold">
-                                      Degree & Nakshatra Triggers ({peakAlignments.length} planet{peakAlignments.length !== 1 ? 's' : ''} matched)
-                                    </h5>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                      {peakAlignments.map((al, ai) => {
-                                        const isHigh = al.severity === 'high';
-                                        return (
-                                          <div key={ai} style={{ padding: '7px 10px', borderRadius: '6px', background: isHigh ? 'rgba(234,179,8,0.05)' : 'rgba(139,92,246,0.03)', border: isHigh ? '1px solid rgba(234,179,8,0.25)' : '1px solid rgba(139,92,246,0.1)', fontSize: '12px' }}>
-                                            <strong className="font-purple">{al.transitPlanet}</strong> transits your <strong className="font-gold">{al.transitHouse}H</strong> ({al.transitSign}) at {al.transitDegree.toFixed(1)}° matching natal <strong className="font-gold">{al.natalPlanet}</strong> at {al.natalDegree.toFixed(1)}° — <span style={{ color: isHigh ? 'var(--gold-bright)' : 'var(--violet)', fontWeight: 600 }}>{al.matchType}</span>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        </Fragment>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Saved Matcher Memory List */}
-              {savedPredictions.length > 0 && (
-                <div className="saved-predictions-history glass-subcard spacing-bottom">
-                  <h4 className="card-subtitle font-gold">Saved Predictions Memory</h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {savedPredictions.map(pred => (
-                      <div
-                        key={pred.id}
-                        className="prediction-history-item"
-                        style={{
-                          background: 'rgba(255, 255, 255, 0.02)',
-                          border: '1px solid rgba(139, 92, 246, 0.2)',
-                          padding: '10px 14px',
-                          borderRadius: '8px',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          gap: '12px'
-                        }}
-                      >
-                        <div>
-                          <strong className="text-highlight" style={{ fontSize: '13px' }}>{pred.title}</strong>
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            Birth Profile: <strong>{pred.profileName}</strong> | Event: <strong>{pred.eventName}</strong> ({pred.eventStart} to {pred.eventEnd})
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleLoadSavedPrediction(pred)}
-                            className="btn btn-secondary"
-                            style={{ padding: '4px 10px', fontSize: '11px' }}
-                          >
-                            Load
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSavedPrediction(pred.id)}
-                            className="btn"
-                            style={{
-                              padding: '4px 8px',
-                              fontSize: '11px',
-                              background: 'transparent',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              color: 'var(--accent-red, #ef4444)'
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* CSV Uploader Panel */}
-              <div className="csv-uploader-section glass-subcard spacing-bottom">
-                <h4 className="card-subtitle">Bulk Import Life Events (CSV)</h4>
-                <p className="section-description">
-                  Attach/upload a CSV file containing your historical timeline or load the preloaded workspace CSV.
-                  Required columns: <code>Year</code>, <code>Event Title</code>. Optional: <code>Description</code>.
-                </p>
-                
-                <div 
-                  className={`csv-dropzone ${dragActive ? 'drag-active' : ''}`}
-                  onDragEnter={handleDrag}
-                  onDragOver={handleDrag}
-                  onDragLeave={handleDrag}
-                  onDrop={handleDrop}
-                >
-                  <div className="dropzone-content">
-                    <svg className="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-                    </svg>
-                    <p>Drag and drop your life events CSV file here, or</p>
-                    <label className="btn btn-primary file-browse-btn">
-                      Browse Files
-                      <input 
-                        type="file" 
-                        accept=".csv" 
-                        onChange={handleFileChange} 
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {isAdmin && (
-                  <div className="csv-actions-row">
-                    <button onClick={handleLoadWorkspaceCSV} className="btn btn-secondary">
-                      Load Workspace CSV Timeline
-                    </button>
-                  </div>
-                )}
-
-                {csvError && <p className="error-message csv-error">{csvError}</p>}
-              </div>
-
-              {/* CSV Import Preview Wizard */}
-              {csvPreviewEvents.length > 0 && (
-                <div className="import-wizard-card glass-subcard tab-content-fade spacing-bottom">
-                  <div className="wizard-header">
-                    <h4 className="card-subtitle font-gold">CSV Import Preview Wizard</h4>
-                    <span className="info-badge">{csvPreviewEvents.filter(e => e.selected).length} of {csvPreviewEvents.length} Selected</span>
-                  </div>
-                  <p className="wizard-instructions">
-                    We parsed the events and estimated their dates & categories. Review, customize, and edit the events below before importing.
-                  </p>
-                  
-                  <div className="table-responsive wizard-table-container">
-                    <table className="wizard-table">
-                      <thead>
-                        <tr>
-                          <th style={{ width: '40px', textAlign: 'center' }}>
-                            <input 
-                              type="checkbox" 
-                              checked={csvPreviewEvents.length > 0 && csvPreviewEvents.every(e => e.selected)}
-                              onChange={(e) => handleToggleSelectAllPreview(e.target.checked)}
-                            />
-                          </th>
-                          <th>Event Name / Title</th>
-                          <th>Category</th>
-                          <th>Start Date</th>
-                          <th>End Date</th>
-                          <th style={{ width: '50px' }}></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {csvPreviewEvents.map(ev => (
-                          <tr key={ev.id} className={ev.selected ? 'row-selected' : 'row-deselected'}>
-                            <td style={{ textAlign: 'center' }}>
-                              <input 
-                                type="checkbox" 
-                                checked={ev.selected}
-                                onChange={(e) => handleUpdatePreviewEvent(ev.id, 'selected', e.target.checked)}
-                              />
-                            </td>
-                            <td>
-                              <input 
-                                type="text" 
-                                value={ev.name} 
-                                onChange={(e) => handleUpdatePreviewEvent(ev.id, 'name', e.target.value)}
-                                className="text-input preview-row-input"
-                              />
-                            </td>
-                            <td>
-                              <select 
-                                value={ev.category}
-                                onChange={(e) => handleUpdatePreviewEvent(ev.id, 'category', e.target.value)}
-                                className="text-input preview-row-input category-select"
-                              >
-                                <option value="Career">Career & Success</option>
-                                <option value="Finance">Finance & Losses</option>
-                                <option value="Relationship">Marriage & Relationships</option>
-                                <option value="Health">Health & Struggles</option>
-                                <option value="Travel">Travel & Relocation</option>
-                                <option value="Spiritual">Spiritual & Self-realization</option>
-                              </select>
-                            </td>
-                            <td>
-                              <input 
-                                type="date" 
-                                value={ev.startDate}
-                                onChange={(e) => handleUpdatePreviewEvent(ev.id, 'startDate', e.target.value)}
-                                className="text-input preview-row-input date-select"
-                              />
-                            </td>
-                            <td>
-                              <input 
-                                type="date" 
-                                value={ev.endDate}
-                                onChange={(e) => handleUpdatePreviewEvent(ev.id, 'endDate', e.target.value)}
-                                className="text-input preview-row-input date-select"
-                              />
-                            </td>
-                            <td>
-                              <button 
-                                onClick={() => setCsvPreviewEvents(prev => prev.filter(p => p.id !== ev.id))}
-                                className="delete-btn"
-                                title="Remove item from import"
-                                style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-                              >
-                                &times;
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="action-bar-row">
-                    <button 
-                      onClick={() => setCsvPreviewEvents([])} 
-                      className="btn"
-                      style={{ background: 'transparent', border: '1px solid var(--border-cosmic)', color: 'var(--text-primary)' }}
-                    >
-                      Cancel / Clear
-                    </button>
-                    <button onClick={handleBulkImport} className="btn btn-primary">
-                      Bulk Import Selected Events ({csvPreviewEvents.filter(e => e.selected).length})
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Event Logging Form — collapsible */}
-              <div className="event-creation-container glass-subcard collapsible-section">
-                <div className="collapsible-header" onClick={() => setAddEventFormOpen(o => !o)}>
-                  <h4 className="card-subtitle" style={{ margin: 0 }}>Log New Life Event</h4>
-                  <span className="collapsible-chevron">{addEventFormOpen ? '▲' : '▼'}</span>
-                </div>
-                {!addEventFormOpen && <div className="collapsible-hint">Click to expand and add a new event</div>}
-              </div>
-              {addEventFormOpen && (
-              <div className="event-creation-container glass-subcard" style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none', marginTop: '-8px' }}>
-                <div style={{ height: 0 }} />
-                <form onSubmit={handleAddEvent} className="event-form">
-                  <div className="input-group">
-                    <label htmlFor="eventName" className="input-label">Event Name / Description</label>
-                    <input
-                      type="text"
-                      id="eventName"
-                      value={newEvent.name}
-                      onChange={(e) => setNewEvent({ ...newEvent, name: e.target.value })}
-                      placeholder="e.g. Bought First Home, Started Master's degree"
-                      className="text-input"
-                    />
-                  </div>
-                  
-                  <div className="date-row">
-                    <div className="input-group flex-1">
-                      <label htmlFor="eventStart" className="input-label">Start Date</label>
-                      <input
-                        type="date"
-                        id="eventStart"
-                        value={newEvent.startDate}
-                        onChange={(e) => setNewEvent({ ...newEvent, startDate: e.target.value })}
-                        className="text-input"
-                      />
-                    </div>
-                    <div className="input-group flex-1">
-                      <label htmlFor="eventEnd" className="input-label">End Date</label>
-                      <input
-                        type="date"
-                        id="eventEnd"
-                        value={newEvent.endDate}
-                        onChange={(e) => setNewEvent({ ...newEvent, endDate: e.target.value })}
-                        className="text-input"
-                      />
-                    </div>
-                    <div className="input-group flex-1">
-                      <label htmlFor="eventCat" className="input-label">Category</label>
-                      <select
-                        id="eventCat"
-                        value={newEvent.category}
-                        onChange={(e) => setNewEvent({ ...newEvent, category: e.target.value })}
-                        className="text-input"
-                      >
-                        <option value="Career">Career & Success</option>
-                        <option value="Finance">Finance & Losses</option>
-                        <option value="Relationship">Marriage & Relationships</option>
-                        <option value="Health">Health & Struggles</option>
-                        <option value="Travel">Travel & Relocation</option>
-                        <option value="Spiritual">Spiritual & Self-realization</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <button type="submit" className="btn btn-primary spacing-top">
-                    Add Event to Log
-                  </button>
-                </form>
-              </div>
-              )}
-
-              {/* List of logged events — collapsible, default collapsed */}
-              <div className="logged-events-list collapsible-section glass-subcard">
-                <div className="collapsible-header" onClick={() => setEventsListOpen(o => !o)}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <h4 className="card-subtitle" style={{ margin: 0 }}>
-                      Registered Life Events
-                      <span className="events-count-badge">{lifeEvents.length}</span>
-                    </h4>
-                    {selectedEventId && (
-                      <span className="events-active-hint">
-                        ● {lifeEvents.find(e => e.id === selectedEventId)?.name?.slice(0, 30)}…
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {!eventsListOpen && (
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        click to browse &amp; run matcher
-                      </span>
-                    )}
-                    <span className="collapsible-chevron">{eventsListOpen ? '▲ Collapse' : '▼ Expand'}</span>
-                  </div>
-                </div>
-
-                {eventsListOpen && (
-                  <div className="events-grid" style={{ marginTop: '12px' }}>
-                    {lifeEvents.map(ev => (
-                      <div key={ev.id} className={`event-log-card ${selectedEventId === ev.id ? 'selected' : ''}`}>
-                        <div className="event-card-header">
-                          <span className={`event-category-badge cat-${ev.category.toLowerCase()}`}>
-                            {ev.category}
-                          </span>
-                          <button onClick={() => handleDeleteEvent(ev.id)} className="delete-btn" title="Delete event">
-                            &times;
-                          </button>
-                        </div>
-                        <h5 className="event-log-title">{ev.name}</h5>
-                        <p className="event-log-date">Range: {ev.startDate} to {ev.endDate}</p>
-                        <button
-                          className="btn btn-primary event-predict-btn"
-                          style={{ marginTop: '8px', fontSize: '12px', padding: '5px 12px' }}
-                          onClick={() => handlePredictFuture(ev)}
-                          disabled={predicting}
-                          title="Match this event's transit signature against 2026-2056"
-                        >
-                          🔮 Predict Recurrences
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Predictions Display Report */}
-              {predicting && <p className="prediction-loading">Calculating future planetary conjunctions, checking Lahiri Ayanamsha precessions, and scoring patterns...</p>}
-
-              {predictionResults && !predicting && (
-                <div className="prediction-report-card tab-content-fade spacing-top">
-                  <div className="report-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
-                    <h3 className="report-main-title" style={{ margin: 0 }}>Astrological Match & Prediction Report</h3>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input
-                        type="text"
-                        placeholder="Save Name (e.g. My Graduation Match)"
-                        value={predictionSaveNameInput}
-                        onChange={(e) => setPredictionSaveNameInput(e.target.value)}
-                        className="text-input"
-                        style={{ padding: '6px 10px', fontSize: '12px', width: '220px' }}
-                      />
-                      <button
-                        onClick={handleSaveCurrentPrediction}
-                        className="btn btn-primary"
-                        style={{ padding: '6px 12px', fontSize: '12px' }}
-                      >
-                        Save Match to Memory
-                      </button>
-                    </div>
-                  </div>
-                  <div className="separator"></div>
-
-                  <div className="original-event-details glass-subcard">
-                    <h4 className="font-gold font-bold">Historical Event Reference: {predictionResults.event.name}</h4>
-                    <p className="original-text">
-                      During this event ({predictionResults.event.startDate} to {predictionResults.event.endDate}), the planetary transits relative to your birth chart created a specific signature in your house layout:
-                    </p>
-                    <ul className="original-signatures-list">
-                      {Object.keys(predictionResults.originalSignature.eventSignature).map(key => {
-                        const info = predictionResults.originalSignature.eventSignature[key];
-                        return (
-                          <li key={key}>
-                            <strong>{key.toUpperCase()}</strong>: Transiting your{' '}
-                            <span className="text-highlight">{info.house} House</span> ({SIGNS[info.signIndex].name} - {SIGNS[info.signIndex].sanskrit})
-                            {info.conjunctions.length > 0 && (
-                              <span>, conjunct natal: <strong>{info.conjunctions.map(c => c.planet.toUpperCase()).join(', ')}</strong></span>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-
-                  <h4 className="spacing-top font-bold text-highlight">Future Transit Re-occurrences (2026 - 2056)</h4>
-                  <p className="prediction-intro">
-                    We scanned the next 30 years of daily transits. Below are the peak windows where Saturn, Jupiter, Rahu, and Ketu occupy highly similar house alignments and planetary conjunctions relative to your natal chart.
-                  </p>
-
-                  <div className="prediction-results-container">
-                    {predictionResults.futureMatches.length === 0 ? (
-                      <p className="no-matches-found">No similar transit signatures exceeding a 60% match score were found in the 2026-2056 timeframe. This indicates that this event represents a highly unique, non-repeating karmic alignment in your current lifetime.</p>
-                    ) : (
-                      predictionResults.futureMatches.map((match, i) => {
-                        // Enhance with PDF Ashtakvarga data if available
-                        const enhanced = enhanceTransitWithPDFData(match, activePDFData);
-                        const peakSadesati = activePDFData ? getActiveSadesati(activePDFData, match.peakDate) : null;
-                        const peakPratantar = activePDFData ? getActivePratyantar(activePDFData, match.peakDate) : null;
-                        return (
-                        <div key={i} className="prediction-item-card glass-subcard">
-                          <div className="prediction-item-header">
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                              <span className="match-score-pill">
-                                {match.score}% Transit Match
-                              </span>
-                              {enhanced.adjustedScore !== match.score && (
-                                <span className="match-score-pill adjusted" title="Score adjusted by Ashtakvarga bindu weighting">
-                                  {enhanced.adjustedScore}% Bindu-Adjusted
-                                </span>
-                              )}
-                              {peakSadesati && (
-                                <span className={`sadesati-chip phase-${peakSadesati.phase?.toLowerCase() || 'active'}`}>
-                                  ☄ Sadesati {peakSadesati.phase}
-                                </span>
-                              )}
-                            </div>
-                            <span className="prediction-date-range">
-                              Window: <strong>{match.startDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}</strong> to <strong>{match.endDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}</strong>
-                            </span>
-                          </div>
-
-                          {/* Ashtakvarga Bindu Row */}
-                          {activePDFData?.ashtakvarga && enhanced.binduScores && (
-                            <div className="bindu-row">
-                              <span className="bindu-row-label">Ashtakvarga Bindus at peak:</span>
-                              {Object.entries(enhanced.binduScores).map(([planet, scores]) => {
-                                const bl = binduLabel(scores.bindu);
-                                if (!bl) return null;
-                                return (
-                                  <div key={planet} className="bindu-chip" style={{ borderColor: bl.color, color: bl.color }}>
-                                    <span style={{ textTransform: 'capitalize', fontWeight: 700 }}>{planet.slice(0,3)}</span>
-                                    <span className="bindu-num">{scores.bindu}/8</span>
-                                    <span className="bindu-label-text" style={{ color: bl.color }}>{bl.label}</span>
-                                  </div>
-                                );
-                              })}
-                              <span className="bindu-avg">Avg: {enhanced.avgBindu}</span>
-                            </div>
-                          )}
-
-                          {/* Pratyantar timing strip */}
-                          {peakPratantar && (
-                            <div className="pratantar-strip">
-                              <span className="pratantar-label">Pratyantar at peak:</span>
-                              <strong style={{ textTransform: 'capitalize' }}>
-                                {peakPratantar.maha} Maha › {peakPratantar.antar} Antar › {peakPratantar.pratantar} Pratyantar
-                              </strong>
-                              <span className="pratantar-dates">
-                                {peakPratantar.startDate instanceof Date ? peakPratantar.startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}
-                                {' → '}
-                                {peakPratantar.endDate instanceof Date ? peakPratantar.endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Shadbala dasha-lord strength when PDF loaded */}
-                          {activePDFData?.shadbala && (() => {
-                            const { currentMahadasha } = dashaData ? getCurrentDasha(dashaData, match.peakDate) : {};
-                            if (!currentMahadasha) return null;
-                            const sl = shadbalLabel(activePDFData, currentMahadasha.lord);
-                            if (!sl) return null;
-                            return (
-                              <div className="shadbala-strip" style={{ borderColor: sl.color }}>
-                                <span style={{ textTransform: 'capitalize', fontWeight: 700 }}>{currentMahadasha.lord} Mahadasha lord strength:</span>
-                                <span style={{ color: sl.color, fontWeight: 700 }}>{sl.label} ({sl.val.toFixed(2)} Rupas)</span>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{sl.val >= (activePDFData.shadbala._minimum?.[currentMahadasha.lord] || 5) ? 'Above minimum — dasha delivers results' : 'Below minimum — delayed/weakened results'}</span>
-                              </div>
-                            );
-                          })()}
-
-                          {(() => {
-                            const peakAlignments = analyzePeakDateAlignments(match.peakDate, natalChart.planets, natalChart.lagnaSign);
-                            return (
-                          <div className="prediction-body-grid">
-
-                            {/* SECTION 1: Analytical Transit Data */}
-                            <div className="prediction-section border-right">
-                              <h5 className="prediction-sec-title">Section 1: Analytical Transit Data</h5>
-                              <p className="details-intro">Planetary positions at match peak ({match.peakDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}):</p>
-                              <ul className="details-list">
-                                {Object.keys(match.transits).map(key => {
-                                  const tInfo = match.transits[key];
-                                  const origInfo = predictionResults.originalSignature.eventSignature[key];
-                                  return (
-                                    <li key={key} className={tInfo.house === origInfo.house ? 'exact-match' : ''}>
-                                      <strong>{key.toUpperCase()}</strong>: House {tInfo.house} ({SIGNS[tInfo.signIndex].name})
-                                      <br />
-                                      <small className="text-muted">
-                                        (Original: House {origInfo.house} in {SIGNS[origInfo.signIndex].name})
-                                      </small>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </div>
-
-                            {/* SECTION 2: Birth-Chart & Karmic Possibility Analysis */}
-                            <div className="prediction-section">
-                              <h5 className="prediction-sec-title font-purple">Section 2: Natal Potentials & Trik Bhava Activation</h5>
-                              <div className="commentary-scroll">
-                                {match.trikCommentaries.map((com, index) => (
-                                  <div key={index} className="trik-commentary-item">
-                                    <h6 className="commentary-item-title font-gold">{com.title}</h6>
-                                    <p className="commentary-item-text">{com.text}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* SECTION 3: 9-Planet Conjunctions & Degree Activations */}
-                            <div className="prediction-full-width spacing-top" style={{ gridColumn: '1 / -1', borderTop: '1px solid rgba(139, 92, 246, 0.15)', paddingTop: '14px' }}>
-                              <h5 className="prediction-sec-title font-gold" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span>Section 3: Simultaneous Birth Chart Coordinate Triggers (All 9 Planets)</span>
-                                {peakAlignments.length >= 2 ? (
-                                  <span className="info-badge font-gold" style={{ background: 'rgba(234, 179, 8, 0.15)', borderColor: 'var(--accent-gold)', textShadow: '0 0 4px var(--accent-gold)' }}>
-                                    ★ Critical Alignment Day ({peakAlignments.length} Planets Match)
-                                  </span>
-                                ) : peakAlignments.length === 1 ? (
-                                  <span className="info-badge" style={{ fontSize: '10px' }}>Active Trigger (1 Planet Match)</span>
-                                ) : null}
-                              </h5>
-                              <p className="details-intro" style={{ marginBottom: '10px' }}>
-                                Transits of all 9 planets on <strong>{match.peakDate.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</strong> — exact degree (±1°) or Nakshatra matches against your birth chart:
-                              </p>
-
-                              {peakAlignments.length === 0 ? (
-                                <p className="no-matches-found" style={{ padding: '6px 0', fontSize: '12px' }}>No exact degree or Nakshatra conjunctions on this peak date.</p>
-                              ) : (
-                                <div className="alignment-badges-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    {peakAlignments.map((al, idx) => {
-                                      const isHigh = al.severity === 'high';
-                                      return (
-                                        <div 
-                                          key={idx} 
-                                          className="alignment-badge-row" 
-                                          style={{ 
-                                            background: isHigh ? 'rgba(234, 179, 8, 0.05)' : 'rgba(139, 92, 246, 0.03)',
-                                            border: isHigh ? '1px solid rgba(234, 179, 8, 0.25)' : '1px solid rgba(139, 92, 246, 0.1)',
-                                            padding: '8px 12px',
-                                            borderRadius: '6px',
-                                            fontSize: '12px',
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                            flexWrap: 'wrap',
-                                            gap: '8px'
-                                          }}
-                                        >
-                                          <div>
-                                            Transiting <strong className="font-purple">{al.transitPlanet}</strong> transits your <strong className="font-gold">{al.transitHouse} House</strong> ({al.transitSign}) at {al.transitDegree.toFixed(1)}° ({al.transitNakshatra} Nakshatra).
-                                            <br />
-                                            <span style={{ color: 'var(--text-muted)' }}>
-                                              Matches Natal <strong className="font-gold">{al.natalPlanet}</strong> in your <strong className="font-gold">{al.natalHouse} House</strong> ({al.natalSign}) at {al.natalDegree.toFixed(1)}° ({al.natalNakshatra} Nakshatra).
-                                            </span>
-                                          </div>
-                                          <div style={{ textAlign: 'right' }}>
-                                            <span className={`event-category-badge ${isHigh ? 'cat-finance' : 'cat-travel'}`} style={{ padding: '2px 8px', fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold' }}>
-                                              {al.matchType}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              )}
-                            </div>
-
-                          </div>
-                          ); })()}
-                        </div>
-                      );}
-                    )
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB CONTENT 5: Same-Degree & Same-Nakshatra Alignments Scanner */}
-          {activeTab === 'alignment-transits' && natalChart && (
-            <div className="tab-content-fade">
-              <h3 className="tab-section-title">Degree & Nakshatra Transits Scanner</h3>
-              <p className="tab-instructions">
-                In Vedic Jyotish, deep karmic shifts are triggered when a transiting planet passes through the exact degree (within 1.0°) of a natal planet. 
-                If the transit is also in the <strong>same Nakshatra</strong> (direct conjunction), it is categorized as a <strong>Life-Changing Event</strong>. 
-                If they match in degree but transits in a <strong>different house/sign</strong>, it triggers key harmonic aspects and adjustments.
-              </p>
-
-              <div className="scan-controls-block glass-subcard spacing-bottom text-center" style={{ textAlign: 'center', padding: '30px 20px' }}>
-                <h4 className="card-subtitle font-gold">Scan Future Transit Alignments (2026 - 2056)</h4>
-                <p className="section-description spacing-bottom" style={{ maxWidth: '600px', margin: '10px auto 20px' }}>
-                  The engine will scan the next 30 years of Saturn, Jupiter, Rahu, and Ketu transits, cross-referencing your birth chart coordinates to identify these key dates.
-                </p>
-                <button 
-                  onClick={handleScanDegreeAlignments} 
-                  className="btn btn-secondary"
-                  disabled={scanningAlignments}
-                >
-                  {scanningAlignments ? 'Scanning Future Transits...' : 'Scan 30 Years for Alignments'}
-                </button>
-              </div>
-
-              {scanningAlignments && (
-                <div className="prediction-loading">
-                  Searching daily ephemeris, checking Lahiri Ayanamsha boundaries, and computing degree overlaps...
-                </div>
-              )}
-
-              {hasScannedAlignments && !scanningAlignments && (
-                <div className="scanned-alignments-results tab-content-fade">
-                  <h4 className="card-subtitle">Found {degreeAlignments.length} Significant Transit Alignments</h4>
-                  <p className="section-description spacing-bottom">
-                    Review the chronological timeline of planetary triggers below. Pay special attention to "Life-Changing Conjunctions" which mark major shifts.
-                  </p>
-                  <div className="alignments-list-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {degreeAlignments.length === 0 ? (
-                      <p className="no-matches-found">No alignments matching the exact degree (within 1°) of your birth chart planets were found in this timeframe.</p>
-                    ) : (
-                      degreeAlignments.map((al, index) => {
-                        const isHigh = al.severity === 'high';
-                        return (
-                          <div
-                            key={index}
-                            className={`alignment-card glass-subcard ${isHigh ? 'life-changing' : 'aspect-only'}`}
-                            style={{
-                              borderLeft: isHigh ? '3px solid var(--accent-gold)' : '3px solid var(--accent-violet)',
-                              boxShadow: isHigh ? 'var(--shadow-neon-gold)' : 'none',
-                              padding: '16px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '8px'
-                            }}
-                          >
-                            <div className="alignment-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(139, 92, 246, 0.1)', paddingBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
-                              <span className="prediction-date-range">
-                                Peak Date: <strong>{al.date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</strong>
-                              </span>
-                              <span className={`event-category-badge ${isHigh ? 'cat-finance' : 'cat-career'}`} style={{ fontSize: '10px', padding: '3px 8px', fontWeight: 'bold' }}>
-                                {al.matchType}
-                              </span>
-                            </div>
-                            <div className="alignment-card-body" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginTop: '4px' }}>
-                              <div className="alignment-quick-info" style={{ borderRight: '1px solid rgba(139, 92, 246, 0.1)', paddingRight: '16px', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12.5px' }}>
-                                <div><strong>Transit:</strong> <span className="font-purple">{al.transitPlanet}</span> at {al.transitDegree.toFixed(1)}°</div>
-                                <div><strong>House:</strong> {al.transitHouse} ({al.transitSign})</div>
-                                <div><strong>Nakshatra:</strong> {al.transitNakshatra}</div>
-                                <div style={{ height: '1px', background: 'rgba(139, 92, 246, 0.08)', margin: '4px 0' }}></div>
-                                <div><strong>Natal Match:</strong> <span className="font-gold">{al.natalPlanet}</span> at {al.natalDegree.toFixed(1)}°</div>
-                                <div><strong>House:</strong> {al.natalHouse} ({al.natalSign})</div>
-                                <div><strong>Nakshatra:</strong> {al.natalNakshatra}</div>
-                              </div>
-                              <div className="alignment-explanation-text" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', lineHeight: '1.5', textAlign: 'justify' }}>
-                                <p style={{ margin: 0 }}>{al.description}</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB CONTENT 6: Vimshottari Dasha System */}
-          {activeTab === 'dasha-system' && natalChart && dashaData && (() => {
-            const today = new Date();
-            const { currentMahadasha, currentAntardasha, nextMahadasha } = getCurrentDasha(dashaData, today);
-
-            const dashaColors = {
-              ketu: '#ef4444', venus: '#ec4899', sun: '#f97316', moon: '#6366f1',
-              mars: '#dc2626', rahu: '#8b5cf6', jupiter: '#22c55e', saturn: '#64748b', mercury: '#06b6d4'
-            };
-
-            const fmtDate = (d) => d instanceof Date
-              ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
-              : '';
-
-            const totalMs = (d) => d.endDate.getTime() - d.startDate.getTime();
-            const pct = (d) => Math.max(0, Math.min(100, (Math.min(today.getTime(), d.endDate.getTime()) - d.startDate.getTime()) / totalMs(d) * 100));
-
-            return (
-              <div className="tab-content-fade">
-                <h3 className="tab-section-title">Vimshottari Dasha — 120 Year Planetary Period System</h3>
-                <p className="tab-instructions">
-                  Derived from the Moon&apos;s Nakshatra at birth. The Mahadasha (major period) governs the primary karmic theme of each life phase, subdivided into 9 Antardashas following the same planetary sequence.
-                  {activePDFData?.pratyantar?.length > 0 && ' Pratyantar (3rd-level) periods from your uploaded PDF are shown inside each Antardasha.'}
-                </p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                  Birth Moon: <strong style={{ color: 'var(--accent-gold)' }}>{natalChart.planets.moon.nakshatraName}</strong> Nakshatra (Lord: {natalChart.planets.moon.nakshatraLord}) — Pada {natalChart.planets.moon.pada} · {formatDegrees(natalChart.planets.moon.longitude)} in {natalChart.planets.moon.signName}
-                </p>
-
-                {/* Pratyantar summary banner when PDF loaded */}
-                {activePDFData?.pratyantar?.length > 0 && (() => {
-                  const pr = getActivePratyantar(activePDFData, today);
-                  if (!pr) return null;
-                  return (
-                    <div className="pratantar-banner glass-subcard spacing-bottom">
-                      <div className="pratantar-banner-icon">⏱</div>
-                      <div className="pratantar-banner-body">
-                        <div className="pratantar-banner-title">Active Pratyantar (3rd-Level Period)</div>
-                        <div className="pratantar-banner-lords">
-                          <span style={{ textTransform: 'capitalize' }}>{pr.maha}</span>
-                          <span className="pratantar-arrow">›</span>
-                          <span style={{ textTransform: 'capitalize' }}>{pr.antar}</span>
-                          <span className="pratantar-arrow">›</span>
-                          <span style={{ textTransform: 'capitalize', color: 'var(--gold-bright)', fontWeight: 700 }}>{pr.pratantar}</span>
-                        </div>
-                        <div className="pratantar-banner-dates">
-                          {pr.startDate instanceof Date ? pr.startDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : ''}
-                          {' → '}
-                          {pr.endDate instanceof Date ? pr.endDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : ''}
-                        </div>
-                      </div>
-                      {activePDFData.shadbala?.[pr.pratantar] && (() => {
-                        const sl = shadbalLabel(activePDFData, pr.pratantar);
-                        return sl ? (
-                          <div className="pratantar-banner-strength" style={{ color: sl.color }}>
-                            <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '2px' }}>Pratyantar Lord Strength</div>
-                            <div style={{ fontWeight: 700, fontSize: '13px' }}>{sl.label}</div>
-                            <div style={{ fontSize: '11px' }}>{sl.val.toFixed(2)} Rupas</div>
-                          </div>
-                        ) : null;
-                      })()}
-                    </div>
-                  );
-                })()}
-
-                {currentMahadasha && (
-                  <div className="glass-subcard spacing-bottom" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', padding: '20px', border: '1px solid rgba(234,179,8,0.3)' }}>
-                    <div>
-                      <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '4px' }}>Active Mahadasha</div>
-                      <div style={{ fontSize: '22px', fontWeight: 'bold', color: dashaColors[currentMahadasha.lord] || 'var(--accent-gold)', textTransform: 'capitalize' }}>{currentMahadasha.lord} Dasha</div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{fmtDate(currentMahadasha.startDate)} → {fmtDate(currentMahadasha.endDate)}</div>
-                      <div style={{ marginTop: '10px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct(currentMahadasha).toFixed(1)}%`, background: dashaColors[currentMahadasha.lord] || 'var(--accent-gold)', borderRadius: '3px' }} />
-                      </div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{pct(currentMahadasha).toFixed(1)}% elapsed</div>
-                    </div>
-                    {currentAntardasha && (
-                      <div>
-                        <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '4px' }}>Active Antardasha</div>
-                        <div style={{ fontSize: '22px', fontWeight: 'bold', color: dashaColors[currentAntardasha.lord] || 'var(--accent-violet)', textTransform: 'capitalize' }}>{currentAntardasha.lord} Antardasha</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{fmtDate(currentAntardasha.startDate)} → {fmtDate(currentAntardasha.endDate)}</div>
-                        <div style={{ marginTop: '10px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${pct(currentAntardasha).toFixed(1)}%`, background: dashaColors[currentAntardasha.lord] || 'var(--accent-violet)', borderRadius: '3px' }} />
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{pct(currentAntardasha).toFixed(1)}% elapsed</div>
-                      </div>
-                    )}
-                    {nextMahadasha && (
-                      <div style={{ opacity: 0.7 }}>
-                        <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '4px' }}>Next Mahadasha</div>
-                        <div style={{ fontSize: '22px', fontWeight: 'bold', color: dashaColors[nextMahadasha.lord] || 'var(--text-primary)', textTransform: 'capitalize' }}>{nextMahadasha.lord} Dasha</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Begins {fmtDate(nextMahadasha.startDate)}</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{DASHA_YEARS[nextMahadasha.lord]}-year period</div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <h4 className="card-subtitle spacing-top" style={{ marginBottom: '10px' }}>Full Dasha Timeline</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {dashaData.map((dasha, dashIdx) => {
-                    const isActive = currentMahadasha && dasha.lord === currentMahadasha.lord && dasha.startDate.getTime() === currentMahadasha.startDate.getTime();
-                    const isPast = dasha.endDate < today;
-                    const isExpanded = expandedDasha === dashIdx;
-                    return (
-                      <div
-                        key={dashIdx}
-                        className="glass-subcard"
-                        style={{
-                          border: isActive ? '1px solid var(--accent-gold)' : '1px solid rgba(139,92,246,0.15)',
-                          boxShadow: isActive ? '0 0 12px rgba(234,179,8,0.12)' : 'none',
-                          opacity: isPast ? 0.55 : 1,
-                          overflow: 'hidden'
-                        }}
-                      >
-                        <div
-                          style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', cursor: 'pointer' }}
-                          onClick={() => setExpandedDasha(isExpanded ? null : dashIdx)}
-                        >
-                          <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: dashaColors[dasha.lord] || '#888', flexShrink: 0 }} />
-                          <div style={{ flex: 1 }}>
-                            <span style={{ fontSize: '14px', fontWeight: 'bold', textTransform: 'capitalize', color: isActive ? 'var(--accent-gold)' : 'var(--text-primary)' }}>
-                              {dasha.lord.charAt(0).toUpperCase() + dasha.lord.slice(1)} Mahadasha
-                            </span>
-                            {dasha.isPartial && (
-                              <span style={{ fontSize: '10px', background: 'rgba(139,92,246,0.2)', padding: '1px 6px', borderRadius: '8px', marginLeft: '8px', color: 'var(--text-muted)' }}>Balance</span>
-                            )}
-                            {isActive && (
-                              <span style={{ fontSize: '10px', background: 'rgba(234,179,8,0.2)', padding: '1px 6px', borderRadius: '8px', marginLeft: '8px', color: 'var(--accent-gold)', fontWeight: 'bold' }}>ACTIVE NOW</span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right', flexShrink: 0 }}>
-                            <div>{fmtDate(dasha.startDate)} → {fmtDate(dasha.endDate)}</div>
-                            <div>{dasha.years.toFixed(1)} yrs</div>
-                          </div>
-                          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{isExpanded ? '▲' : '▼'}</span>
-                        </div>
-
-                        {/* Progress bar for active mahadasha */}
-                        {isActive && (
-                          <div style={{ height: '3px', background: 'rgba(255,255,255,0.06)' }}>
-                            <div style={{ height: '100%', width: `${pct(dasha).toFixed(1)}%`, background: 'var(--accent-gold)' }} />
-                          </div>
-                        )}
-
-                        {/* Expanded: Antardasha grid */}
-                        {isExpanded && (
-                          <div style={{ borderTop: '1px solid rgba(139,92,246,0.12)', padding: '12px 16px 8px' }}>
-                            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', marginBottom: '8px' }}>Antardashas</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '6px' }}>
-                              {dasha.antardashas.map((antar, aIdx) => {
-                                const isCurrentAntar = isActive && currentAntardasha && antar.lord === currentAntardasha.lord && Math.abs(antar.startDate.getTime() - currentAntardasha.startDate.getTime()) < 864e5;
-                                const antarPast = antar.endDate < today;
-                                return (
-                                  <div key={aIdx} style={{
-                                    padding: '8px 10px',
-                                    borderRadius: '6px',
-                                    background: isCurrentAntar ? 'rgba(234,179,8,0.06)' : 'rgba(255,255,255,0.02)',
-                                    border: isCurrentAntar ? '1px solid rgba(234,179,8,0.3)' : '1px solid rgba(139,92,246,0.1)',
-                                    opacity: antarPast ? 0.5 : 1,
-                                    fontSize: '12px'
-                                  }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                                      <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: dashaColors[antar.lord] || '#888' }} />
-                                      <strong style={{ textTransform: 'capitalize', color: isCurrentAntar ? 'var(--accent-gold)' : 'var(--text-primary)' }}>
-                                        {antar.lord.charAt(0).toUpperCase() + antar.lord.slice(1)}
-                                      </strong>
-                                      {isCurrentAntar && (
-                                        <span style={{ fontSize: '9px', background: 'rgba(234,179,8,0.25)', padding: '0 4px', borderRadius: '6px', color: 'var(--accent-gold)' }}>NOW</span>
-                                      )}
-                                    </div>
-                                    <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
-                                      {fmtDate(antar.startDate)} {'->'} {fmtDate(antar.endDate)}
-                                    </div>
-                                    {/* Pratyantar (3rd level) inline list from PDF data */}
-                                    {isCurrentAntar && activePDFData?.pratyantar?.length > 0 && (() => {
-                                      const prMatch = activePDFData.pratyantar.find(pr =>
-                                        pr.maha === dasha.lord && pr.antar === antar.lord &&
-                                        pr.startDate && pr.endDate && today >= pr.startDate && today <= pr.endDate
-                                      );
-                                      if (!prMatch?.pratantars?.length) return null;
-                                      let segCursor = prMatch.startDate;
-                                      return (
-                                        <div className="pratantar-inline-list">
-                                          {prMatch.pratantars.map((pp, pIdx) => {
-                                            const segStart = segCursor;
-                                            segCursor = pp.endDate;
-                                            const isNow = pp.endDate && today <= pp.endDate && today >= segStart;
-                                            const isPastSeg = pp.endDate && today > pp.endDate;
-                                            return (
-                                              <div key={pIdx} className={`pratantar-inline-row${isNow ? ' active' : ''}${isPastSeg ? ' past' : ''}`}>
-                                                <div className="pratantar-dot" style={{ background: dashaColors[pp.lord] || '#888' }} />
-                                                <span className="pratantar-lord" style={{ textTransform: 'capitalize' }}>{pp.lord}</span>
-                                                <span className="pratantar-end">{'->'}  {fmtDate(pp.endDate)}</span>
-                                                {isNow && <span className="pratantar-now-badge">NOW</span>}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      );
-                                    })()}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
+          {/* Lazy-loaded tab content */}
+          <Suspense fallback={<div className="tab-loading" style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)' }}>✦ Loading…</div>}>
+            {activeTab === 'birth-chart' && natalChart && (
+              <BirthChartTab
+                birthDetails={birthDetails} natalChart={natalChart} dashaData={dashaData}
+                trikBhavaAnalysis={trikBhavaAnalysis} chartSummary={chartSummary} setActiveTab={setActiveTab}
+              />
+            )}
+
+            {activeTab === 'interactive-chart' && natalChart && (
+              <InteractiveChartTab
+                natalChart={natalChart} transitChart={transitChart} vargaCharts={vargaCharts}
+                transitDateInput={transitDateInput} setTransitDateInput={setTransitDateInput}
+                transitTimeInput={transitTimeInput} setTransitTimeInput={setTransitTimeInput}
+                showNakshatras={showNakshatras} setShowNakshatras={setShowNakshatras}
+                onZoom={setZoomId}
+              />
+            )}
+
+            {activeTab === 'historical-transits' && (
+              <HistoricalTransitsTab
+                selectedTransitPlanet={selectedTransitPlanet} setSelectedTransitPlanet={setSelectedTransitPlanet}
+                historicalTransits={historicalTransits} scanningTransits={scanningTransits}
+                handleScanHistoricalTransits={handleScanHistoricalTransits}
+              />
+            )}
+
+            {activeTab === 'predictions' && natalChart && (
+              <PredictionsTab
+                natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
+                lifeEvents={lifeEvents} isAdmin={isAdmin}
+                autoMatches={autoMatches} autoMatchesComputed={autoMatchesComputed} autoMatchesLoading={autoMatchesLoading}
+                expandedAutoMatch={expandedAutoMatch} setExpandedAutoMatch={setExpandedAutoMatch}
+                setAutoMatchesKey={setAutoMatchesKey} setAutoMatches={setAutoMatches}
+                savedPredictions={savedPredictions}
+                handleLoadSavedPrediction={handleLoadSavedPrediction} handleDeleteSavedPrediction={handleDeleteSavedPrediction}
+                csvPreviewEvents={csvPreviewEvents} setCsvPreviewEvents={setCsvPreviewEvents}
+                dragActive={dragActive} csvError={csvError}
+                handleDrag={handleDrag} handleDrop={handleDrop} handleFileChange={handleFileChange}
+                handleLoadWorkspaceCSV={handleLoadWorkspaceCSV} handleBulkImport={handleBulkImport}
+                handleUpdatePreviewEvent={handleUpdatePreviewEvent} handleToggleSelectAllPreview={handleToggleSelectAllPreview}
+                newEvent={newEvent} setNewEvent={setNewEvent}
+                addEventFormOpen={addEventFormOpen} setAddEventFormOpen={setAddEventFormOpen}
+                eventsListOpen={eventsListOpen} setEventsListOpen={setEventsListOpen}
+                selectedEventId={selectedEventId} predicting={predicting} predictionResults={predictionResults}
+                handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handlePredictFuture={handlePredictFuture}
+                predictionSaveNameInput={predictionSaveNameInput} setPredictionSaveNameInput={setPredictionSaveNameInput}
+                handleSaveCurrentPrediction={handleSaveCurrentPrediction}
+              />
+            )}
+
+            {activeTab === 'alignment-transits' && natalChart && (
+              <AlignmentsTab
+                handleScanDegreeAlignments={handleScanDegreeAlignments}
+                scanningAlignments={scanningAlignments} hasScannedAlignments={hasScannedAlignments}
+                degreeAlignments={degreeAlignments}
+              />
+            )}
+
+            {activeTab === 'dasha-system' && natalChart && dashaData && (
+              <DashaTab
+                natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
+                expandedDasha={expandedDasha} setExpandedDasha={setExpandedDasha}
+              />
+            )}
+
+            {activeTab === 'panchanga' && <PanchangaTab birthDetails={birthDetails} />}
+
+            {activeTab === 'compatibility' && <CompatibilityTab savedProfiles={savedProfiles} />}
+          </Suspense>
         </section>
       </main>
 
@@ -4015,4 +1817,3 @@ function App() {
 }
 
 export default App;
-// auth + per-user data isolation + private PDF storage (Supabase)

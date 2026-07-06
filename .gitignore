@@ -25,12 +25,12 @@ dist-ssr
 
 # Claude local settings
 .claude/settings.local.json
-
-# wrangler files
-.wrangler
-.dev.vars*
-!.dev.vars.example
-.env*
-!.env.example
-
 .fuse_hidden*
+
+# Personal data — keep life-event timelines out of the repo
+Life Events Timeline*.csv
+public/life_events_timeline.csv
+
+# Playwright
+test-results/
+playwright-report/

@@ -94,4 +94,13 @@ just **Create Account → Sign In**. No keys to paste.
   RLS policies with `auth.uid()` = that user's id, so queries can only ever match
   their own `astro_sync` row and their own `vedic-reports/<user_id>/...` files.
 - The browser cache (localStorage) is wiped on **Sign Out**, so nothing leaks to
-  the next person on a shared computer. The database policies are the re
+  the next person on a shared computer. The database policies are the real
+  guarantee; the cache wipe is belt-and-suspenders.
+
+## Saving your `VedicReport...pdf`
+
+1. Sign in.
+2. Open **⊙ Profiles**, create a profile (e.g. your name + birth details).
+3. In that profile's card, drop or click-to-upload the PDF. The app parses it
+   **and** uploads the original to your private bucket. A **⬇ PDF** button then
+   lets you re-download the original any time, from any device.

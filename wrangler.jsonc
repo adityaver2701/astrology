@@ -5,14 +5,32 @@
   "compatibility_date": "2026-06-20",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "triggers": {
+    // 0 6 * * *  — daily ping keeps the free-tier Supabase project from auto-pausing.
+    // 0 7 * * 1  — weekly transit-alert emails (no-op until RESEND_API_KEY,
+    //              SUPABASE_SERVICE_ROLE_KEY secrets and ALERT_FROM are set; see worker/alerts.js).
+    "crons": ["0 6 * * *", "0 7 * * 1"]
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
   "ai": { "binding": "AI" },
+
+  // Optional: durable per-user rate limiting for /api/interpret. Without this
+  // binding the worker falls back to per-isolate memory counting.
+  //   npx wrangler kv namespace create RATE_LIMIT_KV
+  // then uncomment and paste the id:
+  // "kv_namespaces": [{ "binding": "RATE_LIMIT_KV", "id": "<paste-id-here>" }],
+
   "vars": {
     "SUPABASE_URL": "https://chpexdmbwbtdyqzfvmow.supabase.co",
     "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocGV4ZG1id2J0ZHlxemZ2bW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNzgzNTgsImV4cCI6MjA5Njg1NDM1OH0.1h3Q8R6CXi2PQmjfU41ERADVemfEkHkhhvI5axv746g"
+    // For transit-alert emails also set (see worker/alerts.js):
+    //   "ALERT_FROM": "Astro Alerts <alerts@yourdomain.com>"
+    // and store the secrets (never commit them):
+    //   npx wrangler secret put RESEND_API_KEY
+    //   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
   }
 }

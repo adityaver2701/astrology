@@ -5,16 +5,21 @@ import { getSession } from './cloudSync';
 // Sends a compact chart summary to the /api/interpret Worker route (Cloudflare
 // Workers AI) and renders the interpretation. Requires a signed-in session;
 // the access token is attached so the Worker can authorize the request.
+// Responses stream in token-by-token (body.stream = true → plain-text stream);
+// if the worker replies with JSON instead (old worker, error, cache miss
+// fallback) we handle that too.
 const FOCUSES = [
   { key: 'overview', label: 'Personality' },
   { key: 'career', label: 'Career' },
   { key: 'relationships', label: 'Relationships' },
   { key: 'current', label: 'Current Dasha' },
+  { key: 'deep', label: 'Deep Reading' },
 ];
 
-export default function AIReading({ summary, disabled }) {
+export default function AIReading({ summary, birth, disabled }) {
   const [focus, setFocus] = useState('overview');
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
 
@@ -30,21 +35,43 @@ export default function AIReading({ summary, disabled }) {
           'Content-Type': 'application/json',
           ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
-        body: JSON.stringify({ summary, focus }),
+        body: JSON.stringify({ summary, focus, birth, stream: true }),
       });
       const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) {
-        // Usually means the API route isn't available (e.g. local `vite` dev
-        // without the Worker). Give an actionable hint instead of raw HTML.
-        throw new Error('AI endpoint not available here. It runs on the deployed site (Cloudflare Worker).');
+
+      if (ct.includes('application/json')) {
+        // Error payloads (and non-streaming workers) come back as JSON.
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        setText(data.text || '(no response)');
+        return;
       }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      setText(data.text || '(no response)');
+
+      if (ct.includes('text/plain') && res.ok && res.body) {
+        // Streamed reading: render tokens as they arrive.
+        setStreaming(true);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let acc = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          setText(acc);
+        }
+        acc += decoder.decode();
+        setText(acc || '(no response)');
+        return;
+      }
+
+      // Anything else usually means the API route isn't available (e.g. local
+      // `vite` dev without the Worker). Give an actionable hint instead of raw HTML.
+      throw new Error('AI endpoint not available here. It runs on the deployed site (Cloudflare Worker).');
     } catch (e) {
       setError(e.message || 'Something went wrong.');
     } finally {
       setLoading(false);
+      setStreaming(false);
     }
   };
 
@@ -70,9 +97,12 @@ export default function AIReading({ summary, disabled }) {
       </div>
 
       <button className="btn btn-primary ai-generate" onClick={generate} disabled={disabled || loading}>
-        {loading ? 'Consulting the stars…' : 'Generate reading'}
+        {loading ? (streaming ? 'Writing…' : 'Consulting the stars…') : 'Generate reading'}
       </button>
 
+      {focus === 'deep' && !disabled && !loading && (
+        <p className="ai-hint">Deep Reading is a long-form Trik Bhava analysis (personality, Snapshot Judgments, and predictive love/career). It takes longer to write and uses one of your daily readings.</p>
+      )}
       {disabled && !loading && (
         <p className="ai-hint">Generate a birth chart first to enable AI readings.</p>
       )}
@@ -80,10 +110,12 @@ export default function AIReading({ summary, disabled }) {
       {text && (
         <div className="ai-result">
           {text.split(/\n{2,}/).map((para, i) => <p key={i}>{para.trim()}</p>)}
-          <p className="ai-disclaimer">
-            AI-generated for reflection and entertainment. Astrology is not scientifically validated;
-            treat readings as food for thought, not advice.
-          </p>
+          {!loading && (
+            <p className="ai-disclaimer">
+              AI-generated for reflection and entertainment. Astrology is not scientifically validated;
+              treat readings as food for thought, not advice.
+            </p>
+          )}
         </div>
       )}
     </div>

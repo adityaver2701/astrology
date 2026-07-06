@@ -126,20 +126,52 @@ export async function cloudLoad() {
 }
 
 /**
- * Upsert the signed-in user's data bundle (last-write-wins on their own row).
- * @param {object} bundle full app data bundle
+ * Thrown when the cloud row was modified by another device after our last
+ * pull. Carries the server's newer data so the caller can offer a choice.
  */
-export async function cloudSave(bundle) {
+export class SyncConflictError extends Error {
+  constructor(serverData, serverUpdatedAt) {
+    super('Cloud data was updated from another device.');
+    this.name = 'SyncConflictError';
+    this.serverData = serverData;
+    this.serverUpdatedAt = serverUpdatedAt;
+  }
+}
+
+/**
+ * Upsert the signed-in user's data bundle.
+ * When `expectedUpdatedAt` is provided, the save is conflict-checked: if the
+ * row's updated_at no longer matches (another device pushed since our last
+ * pull), a SyncConflictError with the server's data is thrown instead of
+ * silently clobbering it. Omit the option to force-overwrite.
+ * @param {object} bundle full app data bundle
+ * @param {{expectedUpdatedAt?: string|null}} [opts]
+ * @returns {Promise<{updatedAt: string}>}
+ */
+export async function cloudSave(bundle, { expectedUpdatedAt } = {}) {
   const sb = requireClient();
   const user = await getCurrentUser();
   if (!user) throw new Error('Not signed in');
+
+  if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== null) {
+    const { data: current, error: readErr } = await wrapTimeout(
+      sb.from(TABLE).select('data, updated_at').eq('user_id', user.id).maybeSingle()
+    );
+    if (readErr) throw friendlyDataError(readErr);
+    if (current && current.updated_at !== expectedUpdatedAt) {
+      throw new SyncConflictError(current.data, current.updated_at);
+    }
+  }
+
+  const updatedAt = new Date().toISOString();
   const { error } = await wrapTimeout(
     sb.from(TABLE).upsert(
-      { user_id: user.id, data: { ...bundle, ownerEmail: user.email }, updated_at: new Date().toISOString() },
+      { user_id: user.id, data: { ...bundle, ownerEmail: user.email }, updated_at: updatedAt },
       { onConflict: 'user_id' }
     )
   );
   if (error) throw friendlyDataError(error);
+  return { updatedAt };
 }
 
 /**

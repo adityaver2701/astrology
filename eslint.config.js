@@ -7,6 +7,12 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores(['dist']),
   {
+    // Node-context config files and the Cloudflare Worker (has fetch/caches
+    // like a service worker plus console etc.).
+    files: ['vite.config.js', 'playwright.config.js', 'worker/**/*.js'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+  },
+  {
     files: ['**/*.{js,jsx}'],
     extends: [
       js.configs.recommended,
