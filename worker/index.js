@@ -1,20 +1,34 @@
 // ── Cloudflare Worker entry ───────────────────────────────────────────────
 // Serves the built SPA from the ASSETS binding and adds a small JSON API.
-//   POST /api/interpret  → Vedic-astrology reading via Cloudflare Workers AI
-//                          (auth-gated, per-user rate-limited, cached, and
-//                          streamed as plain text when body.stream === true)
+//   POST /api/interpret  → Vedic-astrology reading via Groq (free tier) when
+//                          GROQ_API_KEY is set, falling back to Cloudflare
+//                          Workers AI. Auth-gated, per-user rate-limited,
+//                          cached, and streamed as plain text when
+//                          body.stream === true.
+//   POST /api/chat       → Admin-only AI chat grounded in the admin's saved
+//                          profiles. Claude when ANTHROPIC_API_KEY is set,
+//                          else free Groq → Workers AI (see ./chat.js).
 //   GET  /api/health     → Supabase reachability probe for uptime monitors
 // Everything else falls through to static assets (SPA fallback handled by the
 // assets binding's not_found_handling = "single-page-application").
 
 import { sendTransitAlerts } from './alerts.js';
+import { handleChat } from './chat.js';
 
-// Tried in order; if one is deprecated/unavailable we fall through to the next.
+// Cloudflare Workers AI models — tried in order; if one is deprecated or
+// unavailable we fall through to the next. These are the fallback tier.
 const AI_MODELS = [
   '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
   '@cf/meta/llama-3.1-8b-instruct-fast',
   '@cf/mistralai/mistral-small-3.1-24b-instruct',
 ];
+
+// Groq (free tier) is the primary provider when GROQ_API_KEY is configured
+// (`wrangler secret put GROQ_API_KEY`). OpenAI-compatible chat-completions API,
+// very fast token streaming. We fall back to Workers AI if the key is absent
+// or the call fails. Override the model with the GROQ_MODEL var if desired.
+const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_DEFAULT_MODEL = 'llama-3.3-70b-versatile';
 
 // Per-user daily limit on AI readings. Uses the RATE_LIMIT_KV binding when
 // configured (see HOSTING.md); otherwise falls back to a per-isolate memory
@@ -65,11 +79,9 @@ End with a concise Trik-based closing insight explaining how the person's life d
 
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    if (url.pathname === '/api/health') return handleHealth(env);
-    if (url.pathname === '/api/interpret') return handleInterpret(request, env, ctx);
-    if (url.pathname.startsWith('/api/')) return json({ error: 'Unknown endpoint' }, 404);
-    return env.ASSETS.fetch(request);
+    const response = await route(request, env, ctx);
+    // withCors is a no-op unless the request came from the Android WebView.
+    return withCors(withSecurityHeaders(response), request);
   },
 
   // ── Crons ────────────────────────────────────────────────────────────────
@@ -85,6 +97,175 @@ export default {
   },
 };
 
+// ── Android app (Capacitor) cross-origin access ────────────────────────────
+// The Android build serves the bundled site from a LOCAL asset server, so its
+// WebView origin is `https://localhost` — every /api/* call from the app is
+// cross-origin and needs CORS. Only these exact origins are allowed; browsers
+// on any other site still get no CORS headers at all.
+const NATIVE_ORIGINS = new Set([
+  'https://localhost',      // androidScheme: "https" (what capacitor.config.json uses)
+  'http://localhost',       // androidScheme: "http" fallback
+  'capacitor://localhost',  // iOS / legacy scheme, harmless to allow
+]);
+
+function corsHeadersFor(request) {
+  const origin = request.headers.get('Origin');
+  if (!origin || !NATIVE_ORIGINS.has(origin)) return null;
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
+}
+
+function withCors(response, request) {
+  const cors = corsHeadersFor(request);
+  if (!cors) return response;
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+// ── Routing ────────────────────────────────────────────────────────────────
+async function route(request, env, ctx) {
+  const url = new URL(request.url);
+
+  // CORS preflight for the Android app's API calls.
+  if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+    const cors = corsHeadersFor(request);
+    if (cors) return new Response(null, { status: 204, headers: cors });
+    return new Response(null, { status: 204 });
+  }
+
+  // OTA live-update assets. Served from dist/ota/ like any other static file,
+  // but must never be cached by an intermediary or the app will keep seeing a
+  // stale manifest after a deploy. See scripts/build-ota.mjs.
+  if (url.pathname === '/ota/manifest.json') {
+    const res = await env.ASSETS.fetch(request);
+    // The assets binding has not_found_handling = "single-page-application",
+    // so a MISSING manifest comes back as index.html with status 200 rather
+    // than a 404. Detect that and answer honestly, otherwise the app tries to
+    // JSON.parse an HTML page every time it checks for an update.
+    const isHtml = (res.headers.get('content-type') || '').includes('text/html');
+    if (!res.ok || isHtml) {
+      return json(
+        { error: 'No OTA bundle published. Run `npm run deploy` (build:ota + wrangler deploy).' },
+        404,
+        { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }
+      );
+    }
+    const headers = new Headers(res.headers);
+    headers.set('Cache-Control', 'no-store, must-revalidate');
+    headers.set('Access-Control-Allow-Origin', '*');
+    return new Response(res.body, { status: res.status, headers });
+  }
+  if (url.pathname.startsWith('/ota/')) {
+    const res = await env.ASSETS.fetch(request);
+    const headers = new Headers(res.headers);
+    // Bundle filenames are version-stamped, so they're safe to cache forever.
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    headers.set('Access-Control-Allow-Origin', '*');
+    return new Response(res.body, { status: res.status, headers });
+  }
+
+  if (url.pathname === '/api/health') return handleHealth(env);
+  // Per-IP throttle on the (potentially expensive) AI POST endpoints. Auth
+  // login/signup/reset/OTP live on Supabase, which rate-limits them itself.
+  if (url.pathname === '/api/interpret' || url.pathname === '/api/chat') {
+    if (request.method === 'POST' && !(await checkIpRateLimit(env, request))) {
+      return json({ error: 'Too many requests — please slow down and try again shortly.' }, 429);
+    }
+  }
+  if (url.pathname === '/api/interpret') return handleInterpret(request, env, ctx);
+  if (url.pathname === '/api/chat') return handleChat(request, env, ctx);
+  if (url.pathname.startsWith('/api/')) return json({ error: 'Unknown endpoint' }, 404);
+  return env.ASSETS.fetch(request);
+}
+
+// ── Security headers ───────────────────────────────────────────────────────
+// Applied to every response (API JSON, text streams, and static assets alike).
+// CSP restricts scripts to our own origin; connect-src enumerates the only
+// cross-origin hosts the browser legitimately talks to (Supabase for auth/data,
+// Sentry for error reporting, open-meteo + nominatim for the place search).
+// Keep connect-src in sync with any new browser-side fetch target.
+const CSP = [
+  "default-src 'self'",
+  // 'self' plus the Cloudflare Web Analytics beacon that index.html loads.
+  "script-src 'self' https://static.cloudflareinsights.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  // 'self' also covers the Android app's own /api and /ota calls back to this
+  // Worker; the app's local WebView origin isn't governed by this header.
+  "connect-src 'self' https://astrology.penetacle.workers.dev https://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://geocoding-api.open-meteo.com https://nominatim.openstreetmap.org https://cloudflareinsights.com",
+  "worker-src 'self' blob:",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ');
+
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  headers.set('Content-Security-Policy', CSP);
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  // Preserve status/body/stream; only augment headers.
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+// ── Per-IP rate limiting (defense-in-depth) ────────────────────────────────
+// Primary auth (login/signup/password-reset/OTP) is hosted by Supabase, which
+// enforces its own per-IP limits. These endpoints are ours, so we cap the AI
+// routes per source IP to blunt scripted abuse and runaway model cost — and to
+// throttle anyone hammering the Supabase token-verification path through us.
+// Uses RATE_LIMIT_KV when bound; otherwise a per-isolate memory window.
+const IP_LIMIT = 20;            // requests per window
+const IP_WINDOW_SECONDS = 60;   // sliding-ish fixed window
+const ipCounts = new Map();
+
+async function checkIpRateLimit(env, request) {
+  const ip = request.headers.get('CF-Connecting-IP')
+    || request.headers.get('X-Forwarded-For')
+    || 'unknown';
+  const bucket = Math.floor(Date.now() / (IP_WINDOW_SECONDS * 1000));
+  const key = `ip:${ip}:${bucket}`;
+  if (env.RATE_LIMIT_KV) {
+    const current = parseInt((await env.RATE_LIMIT_KV.get(key)) || '0', 10);
+    if (current >= IP_LIMIT) return false;
+    await env.RATE_LIMIT_KV.put(key, String(current + 1), { expirationTtl: IP_WINDOW_SECONDS * 2 });
+    return true;
+  }
+  const current = ipCounts.get(key) || 0;
+  if (current >= IP_LIMIT) return false;
+  if (ipCounts.size > 5000) ipCounts.clear(); // crude GC
+  ipCounts.set(key, current + 1);
+  return true;
+}
+
+// ── Server-side error logging with a client-safe correlation ID ────────────
+// Detailed causes (upstream provider status/body, exception messages) go to the
+// Worker logs only; the client gets a generic message plus the correlation ID
+// so a user can quote it in a support request without exposing internals.
+function errorResponse(status, clientMessage, detail) {
+  const correlationId = crypto.randomUUID();
+  console.error(`[${correlationId}]`, detail);
+  return json({ error: clientMessage, correlationId }, status);
+}
+
 // ── Health check ──────────────────────────────────────────────────────────
 async function handleHealth(env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
@@ -94,10 +275,11 @@ async function handleHealth(env) {
     const r = await fetch(`${env.SUPABASE_URL}/auth/v1/health`, {
       headers: { apikey: env.SUPABASE_ANON_KEY },
     });
-    if (!r.ok) return json({ ok: false, supabase: 'unhealthy', status: r.status }, 503);
+    if (!r.ok) return json({ ok: false, supabase: 'unhealthy' }, 503);
     return json({ ok: true, supabase: 'healthy' });
   } catch (e) {
-    return json({ ok: false, supabase: 'unreachable', error: (e && e.message) || 'unknown' }, 503);
+    console.error('health: supabase probe failed', (e && e.message) || e);
+    return json({ ok: false, supabase: 'unreachable' }, 503);
   }
 }
 
@@ -145,22 +327,26 @@ async function handleInterpret(request, env, ctx) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   // Require a valid Supabase session so the AI endpoint isn't open to the world.
+  // Fail closed: if auth isn't configured we refuse rather than treat callers as
+  // anonymous, so a misconfigured deployment can't silently expose the endpoint.
   const auth = request.headers.get('Authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) return json({ error: 'Please sign in to use AI readings.' }, 401);
-  let userId = 'anonymous';
-  if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
-    try {
-      const u = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
-        headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
-      });
-      if (!u.ok) return json({ error: 'Your session expired — please sign in again.' }, 401);
-      const userInfo = await u.json().catch(() => null);
-      userId = userInfo?.id || 'anonymous';
-    } catch {
-      return json({ error: 'Could not verify your session. Try again.' }, 503);
-    }
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    return json({ error: 'Authentication is not configured on this deployment.' }, 503);
   }
+  let userId;
+  try {
+    const u = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+    });
+    if (!u.ok) return json({ error: 'Your session expired — please sign in again.' }, 401);
+    const userInfo = await u.json().catch(() => null);
+    userId = userInfo?.id;
+  } catch {
+    return json({ error: 'Could not verify your session. Try again.' }, 503);
+  }
+  if (!userId) return json({ error: 'Your session expired — please sign in again.' }, 401);
 
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }
@@ -231,6 +417,44 @@ async function handleInterpret(request, env, ctx) {
   );
 
   let lastErr = 'unknown';
+
+  // ── Primary: Groq (free tier) ────────────────────────────────────────────
+  if (env.GROQ_API_KEY) {
+    const model = env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+    try {
+      const r = await fetch(GROQ_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.GROQ_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: wantsStream }),
+      });
+      if (r.ok) {
+        if (wantsStream) {
+          // OpenAI-style SSE: data: {"choices":[{"delta":{"content":"..."}}]}
+          return sseToTextResponse(r.body, model, (fullText) => {
+            if (fullText) putCache(fullText, model);
+          }, extractOpenAIDelta);
+        }
+        const data = await r.json();
+        const text = data?.choices?.[0]?.message?.content || '';
+        if (text) {
+          putCache(text, model);
+          return json({ text, model });
+        }
+        lastErr = 'empty response from ' + model;
+      } else {
+        lastErr = `Groq ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`;
+      }
+    } catch (e) {
+      lastErr = 'Groq request failed: ' + ((e && e.message) || 'unknown');
+    }
+    // Any Groq failure falls through to Cloudflare Workers AI below.
+  }
+
+  // ── Fallback: Cloudflare Workers AI ──────────────────────────────────────
+  if (!env.AI) return errorResponse(502, 'The AI service is temporarily unavailable. Please try again.', 'interpret: no fallback AI binding; ' + lastErr);
   for (const model of AI_MODELS) {
     try {
       if (wantsStream) {
@@ -252,8 +476,13 @@ async function handleInterpret(request, env, ctx) {
       if (!/deprecat|not found|no such model|unavailable|unsupported|50\d\d/i.test(lastErr)) break;
     }
   }
-  return json({ error: 'AI service error: ' + lastErr }, 502);
+  return errorResponse(502, 'The AI service is temporarily unavailable. Please try again.', 'interpret: all providers failed; ' + lastErr);
 }
+
+// Token extractors for the two SSE shapes we consume.
+// Cloudflare Workers AI: {"response":"tok"} ; OpenAI/Groq: {"choices":[{"delta":{"content":"tok"}}]}
+function extractCfResponse(obj) { return obj?.response || ''; }
+function extractOpenAIDelta(obj) { return obj?.choices?.[0]?.delta?.content || ''; }
 
 // Wrap a plain string as a "stream" response (used for cache hits).
 function textStreamResponse(text, model, source) {
@@ -269,7 +498,7 @@ function textStreamResponse(text, model, source) {
 // Convert Workers AI SSE ("data: {\"response\":\"tok\"}") into a plain-text
 // stream the client can read incrementally, accumulating the full text for
 // the cache callback.
-function sseToTextResponse(sseStream, model, onComplete) {
+function sseToTextResponse(sseStream, model, onComplete, extract = extractCfResponse) {
   let buffer = '';
   let fullText = '';
   const decoder = new TextDecoder();
@@ -285,7 +514,7 @@ function sseToTextResponse(sseStream, model, onComplete) {
           const payload = line.slice(6).trim();
           if (payload === '[DONE]') continue;
           try {
-            const tok = JSON.parse(payload)?.response || '';
+            const tok = extract(JSON.parse(payload)) || '';
             if (tok) {
               fullText += tok;
               controller.enqueue(encoder.encode(tok));
@@ -307,9 +536,9 @@ function sseToTextResponse(sseStream, model, onComplete) {
   });
 }
 
-function json(obj, status = 200) {
+function json(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }

@@ -124,7 +124,9 @@ async function sendEmail(env, to, name, windows) {
       html,
     }),
   });
-  if (!r.ok) console.error('transit-alerts: resend failed', r.status, await r.text());
+  // Log the status only. Resend's error body echoes the recipient address, so
+  // dumping it would spill a user email into the Worker logs.
+  if (!r.ok) console.error('transit-alerts: resend failed', r.status);
 }
 
 function escapeHtml(s) {

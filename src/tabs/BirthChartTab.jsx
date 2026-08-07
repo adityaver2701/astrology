@@ -88,16 +88,20 @@ export default function BirthChartTab({ birthDetails, natalChart, dashaData, tri
                   </thead>
                   <tbody>
                     {/* Ascendant details as first row */}
+                    {/* data-label drives the stacked-card layout on phones:
+                        under 768px the table collapses to one card per row and
+                        each cell renders its column name via ::before. Keep
+                        these in sync with the <th> text above. */}
                     <tr>
-                      <td><strong>Ascendant (Lagna)</strong></td>
-                      <td>{SIGNS[natalChart.lagnaSign].name}</td>
-                      <td>{SIGNS[natalChart.lagnaSign].sanskrit}</td>
-                      <td>{formatDegrees(natalChart.lagnaDegree)}</td>
-                      <td>--</td>
-                      <td>--</td>
-                      <td>{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].name}</td>
-                      <td>{Math.floor(((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) % 13.333333) / 3.333333) + 1}</td>
-                      <td>{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].lord}</td>
+                      <td data-label="Planet"><strong>Ascendant (Lagna)</strong></td>
+                      <td data-label="Zodiac Sign">{SIGNS[natalChart.lagnaSign].name}</td>
+                      <td data-label="Sanskrit Sign">{SIGNS[natalChart.lagnaSign].sanskrit}</td>
+                      <td data-label="Longitude">{formatDegrees(natalChart.lagnaDegree)}</td>
+                      <td data-label="Dignity">--</td>
+                      <td data-label="Retrograde">--</td>
+                      <td data-label="Nakshatra">{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].name}</td>
+                      <td data-label="Pada">{Math.floor(((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) % 13.333333) / 3.333333) + 1}</td>
+                      <td data-label="Nakshatra Lord">{NAKSHATRAS[Math.floor((natalChart.lagnaSign * 30 + natalChart.lagnaDegree) / 13.333333)].lord}</td>
                     </tr>
                     {/* Planet positions rows */}
                     {Object.keys(natalChart.planets).map(key => {
@@ -107,15 +111,15 @@ export default function BirthChartTab({ birthDetails, natalChart, dashaData, tri
                       const dignityClass = dignity === 'exalted' ? 'dignity-exalted' : dignity === 'debilitated' ? 'dignity-debilitated' : dignity === 'own' ? 'dignity-own' : '';
                       return (
                         <tr key={p.id}>
-                          <td>{PLANET_NAMES[p.id]}</td>
-                          <td>{p.signName}</td>
-                          <td>{p.signSanskrit}</td>
-                          <td>{formatDegrees(p.degree)}</td>
-                          <td><span className={dignityClass}>{dignityLabel}</span></td>
-                          <td>{p.retrograde ? <span className="retrograde-indicator">Yes (R)</span> : 'No'}</td>
-                          <td>{p.nakshatraName}</td>
-                          <td>{p.pada}</td>
-                          <td>{p.nakshatraLord}</td>
+                          <td data-label="Planet">{PLANET_NAMES[p.id]}</td>
+                          <td data-label="Zodiac Sign">{p.signName}</td>
+                          <td data-label="Sanskrit Sign">{p.signSanskrit}</td>
+                          <td data-label="Longitude">{formatDegrees(p.degree)}</td>
+                          <td data-label="Dignity"><span className={dignityClass}>{dignityLabel}</span></td>
+                          <td data-label="Retrograde">{p.retrograde ? <span className="retrograde-indicator">Yes (R)</span> : 'No'}</td>
+                          <td data-label="Nakshatra">{p.nakshatraName}</td>
+                          <td data-label="Pada">{p.pada}</td>
+                          <td data-label="Nakshatra Lord">{p.nakshatraLord}</td>
                         </tr>
                       );
                     })}

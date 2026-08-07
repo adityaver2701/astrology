@@ -3,6 +3,8 @@
 // a chart can be shared read-only. No server round-trip; the recipient's
 // browser recomputes everything from the encoded birth data.
 
+import { shareOrigin } from '../apiBase.js';
+
 const FIELDS = ['name', 'date', 'time', 'placeName', 'latitude', 'longitude', 'timezone', 'tzId'];
 
 function toBase64Url(str) {
@@ -19,8 +21,13 @@ function fromBase64Url(b64) {
   return new TextDecoder().decode(bytes);
 }
 
-/** Build a shareable URL for the given birth details. */
-export function buildShareUrl(birthDetails, origin = window.location.origin) {
+/**
+ * Build a shareable URL for the given birth details.
+ * Defaults to the PUBLIC site origin — inside the Android app
+ * `window.location.origin` is the WebView's private `https://localhost`, which
+ * would produce a link nobody else could open.
+ */
+export function buildShareUrl(birthDetails, origin = shareOrigin()) {
   const compact = {};
   for (const f of FIELDS) {
     if (birthDetails[f] !== undefined && birthDetails[f] !== null && birthDetails[f] !== '') {

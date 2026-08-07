@@ -25,6 +25,14 @@ import {
 const TABLE = 'astro_sync';
 const BUCKET = 'vedic-reports'; // private per-user storage bucket
 
+// Upload guards (defence-in-depth; the authoritative limit is the bucket's
+// file_size_limit / allowed_mime_types in Supabase, which is server-enforced
+// and cannot be bypassed by scripting the anon key directly — see
+// SUPABASE_AUTH_SETUP.md). These client checks fail fast with a clear message
+// and blunt accidental abuse (filling the shared project storage).
+const MAX_REPORT_BYTES = 15 * 1024 * 1024; // 15 MB per PDF
+const MAX_REPORTS_PER_USER = 50;           // cap files in a user's folder
+
 // Re-export config helpers so existing imports keep working.
 export {
   getSupabaseConfig as getSyncConfig,
@@ -164,14 +172,23 @@ export async function cloudSave(bundle, { expectedUpdatedAt } = {}) {
   }
 
   const updatedAt = new Date().toISOString();
-  const { error } = await wrapTimeout(
+  const { data: saved, error } = await wrapTimeout(
     sb.from(TABLE).upsert(
       { user_id: user.id, data: { ...bundle, ownerEmail: user.email }, updated_at: updatedAt },
       { onConflict: 'user_id' }
     )
+      .select('updated_at')
+      .single()
   );
   if (error) throw friendlyDataError(error);
-  return { updatedAt };
+  // Return the timestamp AS SERIALIZED BY POSTGRES, not the client ISO string we
+  // sent. `timestamptz` round-trips in a different textual form than JS
+  // toISOString() — Postgres uses a `+00:00` offset (and microsecond precision)
+  // where JS emits `Z` with milliseconds. The conflict check compares these
+  // strings verbatim, so returning the client string here would make the very
+  // next save read back the server format, mismatch, and throw a spurious
+  // SyncConflictError. Persisting the server value keeps both sides identical.
+  return { updatedAt: saved?.updated_at || updatedAt };
 }
 
 /**
@@ -187,6 +204,50 @@ export async function adminListAllData() {
   );
   if (error) throw friendlyDataError(error);
   return data || [];
+}
+
+/**
+ * Permanently delete everything personal this app stores for the signed-in
+ * user: their private PDF report files, then their `astro_sync` data row (birth
+ * details, saved profiles, life events, notes, ownerEmail — all of it). Both
+ * deletes are owner-scoped by RLS ("astro_sync own delete" / "reports own
+ * delete"), so a user can only ever erase their own data.
+ *
+ * Note on the auth record: removing the row in `auth.users` (email + bcrypt
+ * password hash) requires the service-role key and therefore cannot be done
+ * from the browser. This wipes all app-collected PII; deleting the login
+ * itself is a separate admin/service-role step (documented in the setup SQL).
+ *
+ * @returns {Promise<{deletedFiles: number}>}
+ */
+export async function deleteAccountData() {
+  const sb = requireClient();
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not signed in');
+
+  // 1. Remove every stored report under the user's private folder.
+  let deletedFiles = 0;
+  try {
+    const { data: files } = await sb.storage.from(BUCKET).list(user.id, { limit: 1000 });
+    const paths = (files || []).map((f) => `${user.id}/${f.name}`);
+    if (paths.length) {
+      const { error: rmErr } = await sb.storage.from(BUCKET).remove(paths);
+      if (rmErr && !/not.*found/i.test(rmErr.message)) throw friendlyStorageError(rmErr);
+      deletedFiles = paths.length;
+    }
+  } catch (e) {
+    // Non-fatal: still delete the data row even if file cleanup partially fails.
+    if (e instanceof Error && /bucket not found/i.test(e.message)) { /* nothing to clean */ }
+    else throw e;
+  }
+
+  // 2. Delete the user's data row (profiles, birth details, ownerEmail, …).
+  const { error } = await wrapTimeout(
+    sb.from(TABLE).delete().eq('user_id', user.id)
+  );
+  if (error) throw friendlyDataError(error);
+
+  return { deletedFiles };
 }
 
 /** Quick connectivity/credentials check for the settings modal. */
@@ -218,6 +279,24 @@ export async function uploadReport(profileId, file) {
   const sb = requireClient();
   const user = await getCurrentUser();
   if (!user) throw new Error('Not signed in');
+
+  // Type + size guard. The bucket's own file_size_limit/allowed_mime_types are
+  // the real server-side enforcement; these give an early, friendly failure.
+  if ((file.type && file.type !== 'application/pdf') && !/\.pdf$/i.test(file.name || '')) {
+    throw new Error('Only PDF reports can be uploaded.');
+  }
+  if (file.size > MAX_REPORT_BYTES) {
+    throw new Error(`That PDF is too large (max ${Math.round(MAX_REPORT_BYTES / 1024 / 1024)} MB).`);
+  }
+
+  // Cap the number of stored reports per user so a signed-in account can't fill
+  // the shared project storage by looping uploads.
+  const { data: existing, error: listErr } = await sb.storage
+    .from(BUCKET).list(user.id, { limit: MAX_REPORTS_PER_USER + 1 });
+  if (!listErr && (existing?.length || 0) >= MAX_REPORTS_PER_USER) {
+    throw new Error(`Report limit reached (${MAX_REPORTS_PER_USER}). Delete an old report before uploading another.`);
+  }
+
   const path = reportPath(user.id, profileId, file.name);
   const { error } = await sb.storage.from(BUCKET).upload(path, file, {
     cacheControl: '3600',

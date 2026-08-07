@@ -5,13 +5,20 @@
  *            KP Cuspal Positions, Shadbala, Sadesati, Basic Birth Details, Chalit Table.
  */
 
+// Resolve the worker URL from the installed package (not a hand-copied file in
+// public/). Vite bundles this as a hashed asset and — crucially — it is always
+// the exact same version as the pdfjs-dist API imported below. A static
+// public/pdf.worker.min.mjs drifts out of sync the moment `^` lets npm bump the
+// library, producing "The API version X does not match the Worker version Y".
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 // pdfjs-dist is loaded lazily (only when a PDF is uploaded) to avoid
 // any module-initialization errors crashing the app at startup.
 let _pdfjsLib = null;
 async function getPdfjs() {
   if (_pdfjsLib) return _pdfjsLib;
   _pdfjsLib = await import('pdfjs-dist');
-  _pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  _pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   return _pdfjsLib;
 }
 
@@ -169,9 +176,15 @@ function parsePlanetaryPositions(allText) {
   while (i < lines.length) {
     const line = lines[i].toLowerCase().replace(/\s*\[r\]/i, '').trim();
     const planetKey = SHORT_TO_FULL[line] || null;
-    const isAsc = lines[i].toLowerCase().startsWith('asc');
+    // Match the "ASC" table CELL only — an exact token. The old
+    // startsWith('asc') also matched the "Your Ascendant" prose paragraph later
+    // in the section, which overwrote the real ascendant row with a null sign
+    // (breaking fullDegree and, downstream, the PDF-anchored divisional charts).
+    const isAsc = /^asc$/i.test(line);
 
-    if (planetKey || isAsc) {
+    // Skip if we've already captured this body (prevents any later stray match
+    // from clobbering a good row).
+    if ((planetKey || isAsc) && !planets[isAsc ? 'ascendant' : planetKey]) {
       const key = isAsc ? 'ascendant' : planetKey;
       const isRetrograde = /\[r\]/i.test(lines[i]);
       // Next lines: sign, degree, nakshatra, pada
@@ -183,7 +196,9 @@ function parsePlanetaryPositions(allText) {
       const signIdx = SIGN_INDEX[sign] ?? null;
       const degDecimal = dmsToDecimal(degree);
 
-      if (signIdx !== null || isAsc) {
+      // Require a valid sign to accept the row (the real ASC/planet rows always
+      // have one) so prose or layout noise can't create null-sign entries.
+      if (signIdx !== null) {
         planets[key] = {
           sign: (lines[i + 1] || '').trim(),
           signIndex: signIdx,

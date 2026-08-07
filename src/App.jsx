@@ -16,14 +16,16 @@ import {
   getSyncConfig, setSyncConfig, clearSyncConfig, isSupabaseConfigured,
   cloudLoad, cloudSave, testConnection, SyncConflictError,
   signOut, getSession, onAuthChange,
-  uploadReport, getReportUrl,
+  uploadReport, getReportUrl, deleteAccountData,
 } from './cloudSync';
 import AuthScreen from './AuthScreen';
 import GuideTour from './GuideTour';
 import AdminDashboard from './AdminDashboard';
+import ClaudeChat from './ClaudeChat';
 import KundaliChart from './components/KundaliChart';
 import SyncSettingsModal from './components/SyncSettingsModal';
 import ProfileManagerModal from './components/ProfileManagerModal';
+import MobileNav from './components/MobileNav';
 import { VARGAS, buildVargaChart } from './vargas';
 import {
   PROFILE_COLORS, DEFAULT_BIRTH, ADMIN_EMAILS, PLANET_NAMES, TABS,
@@ -91,6 +93,9 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [geocodingLoading, setGeocodingLoading] = useState(false);
   const [geocodingError, setGeocodingError] = useState('');
+  // Candidate matches from the geocoder — user picks the right one so
+  // same-named places (and thus the wrong timezone) don't get chosen silently.
+  const [geocodingResults, setGeocodingResults] = useState([]);
 
   // Natal Chart Output State
   const [natalChart, setNatalChart] = useState(null);
@@ -207,6 +212,9 @@ function App() {
   const lastPushedJsonRef = useRef(null);   // avoids re-pushing identical data
   const syncTimerRef = useRef(null);
   const lastSyncedAtRef = useRef(null);  // updated_at of the row we last pulled/pushed (conflict detection)
+  // Mirror of syncStatus readable from event handlers without re-subscribing.
+  const syncStatusRef = useRef(syncStatus);
+  useEffect(() => { syncStatusRef.current = syncStatus; }, [syncStatus]);
 
   // ── Auth (Supabase) ────────────────────────────────────────────────────
   // session: undefined = still checking · null = signed out · object = signed in
@@ -259,24 +267,68 @@ function App() {
     setSyncStatus('off');
   }, [resetLocalData]);
 
+  // Permanently erase all personal data: cloud PDF files + the astro_sync row
+  // (birth details, profiles, life events, notes, email), then wipe this
+  // browser's copy and sign out. The login record itself (auth.users) needs a
+  // service-role delete — see deleteAccountData()'s note.
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const handleDeleteAccountData = useCallback(async () => {
+    if (!window.confirm(
+      'Permanently delete ALL your data — birth details, saved profiles, life events, notes, and uploaded PDF reports? This cannot be undone.'
+    )) return;
+    setDeletingAccount(true);
+    try {
+      cloudReadyRef.current = false;
+      lastPushedJsonRef.current = null;
+      await deleteAccountData();
+      try { await signOut(); } catch (e) { console.error('sign out', e); }
+      resetLocalData();
+      setSyncStatus('off');
+      setShowUserMenu(false);
+      alert('Your data has been deleted.');
+    } catch (e) {
+      alert(`Could not delete your data: ${e.message || 'unknown error'}`);
+    } finally {
+      setDeletingAccount(false);
+    }
+  }, [resetLocalData]);
+
   // ── First-run guided tour ──────────────────────────────────────────────
   const [showGuide, setShowGuide] = useState(false);
+  // "Seen" is an ACCOUNT-level fact, persisted in the synced bundle (see
+  // guideSeen in the bundles below) so the tour never reappears on a second
+  // device, a different browser, or after clearing site data. localStorage is
+  // only a per-device cache so a returning user on THIS device doesn't even
+  // briefly flash the tour while the cloud row is still loading.
+  const [guideSeen, setGuideSeen] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showClaudeChat, setShowClaudeChat] = useState(false);
+  // Mobile "More" navigation sheet (see components/MobileNav.jsx).
+  const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [zoomId, setZoomId] = useState(null); // id of chart shown enlarged
   const guideKey = user ? `astro_guide_seen_${user.id}` : null;
 
-  // Auto-open the guide the first time each user signs in.
+  // Seed the local "seen" cache when the signed-in user changes.
   useEffect(() => {
-    if (!user || !guideKey) return;
-    if (!localStorage.getItem(guideKey)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setShowGuide(true);
-    }
-  }, [user, guideKey]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGuideSeen(!!(guideKey && localStorage.getItem(guideKey)));
+  }, [guideKey]);
 
   const markGuideSeen = useCallback(() => {
+    setGuideSeen(true);
     if (guideKey) localStorage.setItem(guideKey, '1');
   }, [guideKey]);
+
+  // Auto-open the guide only AFTER the cloud row has loaded and neither the
+  // synced bundle nor this device has recorded that the account has seen it.
+  // Waiting for the pull (syncStatus !== 'loading') is what makes "first login
+  // only" hold across devices — a returning user's cloud row sets guideSeen
+  // during applyCloudBundle before this runs.
+  useEffect(() => {
+    if (!user || syncStatus === 'loading' || guideSeen) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShowGuide(true);
+  }, [user, syncStatus, guideSeen]);
 
   const closeGuide = useCallback(() => { markGuideSeen(); setShowGuide(false); }, [markGuideSeen]);
   const finishGuide = useCallback(() => {
@@ -293,7 +345,8 @@ function App() {
     activeProfileId: d.activeProfileId,
     birthDetails: d.birthDetails,
     lifeEvents: d.lifeEvents,
-    alertsEnabled: !!d.alertsEnabled
+    alertsEnabled: !!d.alertsEnabled,
+    guideSeen: !!d.guideSeen
   });
 
   const applyCloudBundle = useCallback((d) => {
@@ -307,7 +360,13 @@ function App() {
       setActiveProfileId(d.activeProfileId);
       localStorage.setItem('astro_active_profile_id', String(d.activeProfileId));
     }
-  }, []);
+    // Account-level "tour seen": honour the synced flag so a returning user on
+    // any device is never shown the first-run tour again.
+    if (d.guideSeen) {
+      setGuideSeen(true);
+      if (guideKey) localStorage.setItem(guideKey, '1');
+    }
+  }, [guideKey]);
 
   // Per-user startup pull: when a user signs in, load THEIR row (cloud wins).
   // A fresh account starts empty. Runs again whenever the signed-in user changes.
@@ -336,7 +395,7 @@ function App() {
           const bundle = {
             version: 1, savedProfiles: [], savedPredictions: [], activeProfileId: null,
             birthDetails: { ...DEFAULT_BIRTH }, lifeEvents: [], alertsEnabled: false,
-            savedAt: new Date().toISOString()
+            guideSeen: false, savedAt: new Date().toISOString()
           };
           const saved = await cloudSave(bundle);
           lastPushedJsonRef.current = canonicalBundleJson(bundle);
@@ -368,6 +427,7 @@ function App() {
       birthDetails,
       lifeEvents,
       alertsEnabled,
+      guideSeen,
       savedAt: new Date().toISOString()
     };
     const json = canonicalBundleJson(bundle);
@@ -417,7 +477,86 @@ function App() {
     }, 1500);
     return () => clearTimeout(syncTimerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents, alertsEnabled, user?.id]);
+  }, [savedProfiles, savedPredictions, activeProfileId, birthDetails, lifeEvents, alertsEnabled, guideSeen, user?.id]);
+
+  // Resume pull: keep the Android app and the website showing the same data.
+  //
+  // The startup pull above only runs when the signed-in user changes, so a
+  // device that stayed open never saw edits made elsewhere. This re-pulls
+  // whenever the app returns to the foreground (native) or the tab becomes
+  // visible again (web) — the 'astro:resume' event is emitted by src/native/.
+  //
+  // It refuses to overwrite unsynced local edits: if this device has changes
+  // the debounced save hasn't pushed yet, the pull is skipped and the normal
+  // conflict-aware save path resolves it instead.
+  useEffect(() => {
+    if (!authConfigured || !user) return;
+
+    const onResume = async () => {
+      if (!cloudReadyRef.current) return;          // startup pull still running
+      if (syncStatusRef.current === 'saving') return;
+
+      // canonicalBundleJson deliberately omits `savedAt`, so this is a stable
+      // content fingerprint — comparable against the last thing we pushed.
+      const localJson = canonicalBundleJson({
+        savedProfiles, savedPredictions, activeProfileId,
+        birthDetails, lifeEvents, alertsEnabled, guideSeen,
+      });
+      // Unpushed local edits → let the save path (and its conflict prompt) win.
+      if (lastPushedJsonRef.current && localJson !== lastPushedJsonRef.current) return;
+
+      try {
+        const row = await cloudLoad();
+        if (!row?.data) return;
+        // Nothing new upstream.
+        if (row.updatedAt && row.updatedAt === lastSyncedAtRef.current) return;
+        const cloudJson = canonicalBundleJson(row.data);
+        if (cloudJson === lastPushedJsonRef.current) {
+          lastSyncedAtRef.current = row.updatedAt || lastSyncedAtRef.current;
+          return;
+        }
+        applyCloudBundle(row.data);
+        lastPushedJsonRef.current = cloudJson;
+        lastSyncedAtRef.current = row.updatedAt || null;
+        setSyncStatus('synced');
+        setSyncError('');
+      } catch (err) {
+        // A failed background refresh is not worth surfacing — the device
+        // keeps working on its local copy and retries on the next resume.
+        console.warn('Resume sync skipped', err);
+      }
+    };
+
+    window.addEventListener('astro:resume', onResume);
+    return () => window.removeEventListener('astro:resume', onResume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, authConfigured, savedProfiles, savedPredictions, activeProfileId,
+      birthDetails, lifeEvents, alertsEnabled, guideSeen]);
+
+  // Android hardware back button.
+  //
+  // src/native/ dispatches a cancelable 'astro:backbutton'; calling
+  // preventDefault() tells it we handled the press. Without this the back
+  // button exits the app even when a modal is covering the screen, which reads
+  // as a crash. Order matters — innermost overlay first.
+  useEffect(() => {
+    const onBack = (e) => {
+      const close = (fn) => { e.preventDefault(); fn(); };
+      if (showMoreSheet) return close(() => setShowMoreSheet(false));
+      if (showClaudeChat) return close(() => setShowClaudeChat(false));
+      if (showAdmin) return close(() => setShowAdmin(false));
+      if (showGuide) return close(() => setShowGuide(false));
+      if (showSyncSettings) return close(() => setShowSyncSettings(false));
+      if (showProfileManager) return close(() => setShowProfileManager(false));
+      if (showUserMenu) return close(() => setShowUserMenu(false));
+      // No overlay open: fall back to the first tab before letting the app exit.
+      if (activeTab !== TABS[0].id) return close(() => setActiveTab(TABS[0].id));
+      // Nothing handled → native layer exits the app.
+    };
+    window.addEventListener('astro:backbutton', onBack);
+    return () => window.removeEventListener('astro:backbutton', onBack);
+  }, [showMoreSheet, showClaudeChat, showAdmin, showGuide, showSyncSettings,
+      showProfileManager, showUserMenu, activeTab]);
 
   // Advanced: override the Supabase URL/key (most users never need this — the
   // app ships pre-configured). Saving reloads so the auth client re-inits.
@@ -581,7 +720,16 @@ function App() {
       }
     } catch (err) {
       console.error('PDF parse error', err);
-      setPdfParseError(`Could not parse PDF: ${err.message || 'Unknown error'}. Ensure this is an AstroSage Vedic Kundli report.`);
+      // A failed dynamic import means the app was redeployed while this tab was
+      // open (the pdfParser chunk hash changed) — not a bad PDF. Tell the user to
+      // refresh rather than blaming their file. The vite:preloadError handler in
+      // main.jsx usually auto-reloads first, so this is a fallback message.
+      const msg = err?.message || 'Unknown error';
+      if (/dynamically imported module|Importing a module script failed|error loading dynamically imported/i.test(msg)) {
+        setPdfParseError('A new version of the app was just deployed. Please refresh the page (Ctrl+Shift+R), then upload the PDF again.');
+      } else {
+        setPdfParseError(`Could not parse PDF: ${msg}. Ensure this is an AstroSage Vedic Kundli report.`);
+      }
     } finally {
       setParsingPDFForProfile(null);
     }
@@ -632,12 +780,37 @@ function App() {
   // Divisional (varga) charts derived from the natal sidereal positions.
   const vargaCharts = useMemo(() => {
     if (!natalChart || !natalChart.planets) return [];
-    const asc = natalChart.lagnaSign * 30 + natalChart.lagnaDegree;
+
+    // Prefer the uploaded AstroSage report's EXACT sidereal longitudes when a PDF
+    // is present. Divisional charts (especially D9/Navamsa) sit on 3°20′ sign
+    // boundaries, so an ascendant re-computed from typed birth details can land a
+    // fraction of a degree on the wrong side of a boundary and disagree with the
+    // report (e.g. D9 lagna showing Leo instead of Virgo). The report carries the
+    // precise ascendant + planet longitudes, so anchor the vargas to it for an
+    // exact match. Falls back to the computed chart when no PDF (or a given planet
+    // is missing from the parse).
+    let planetsSource = natalChart.planets;
+    let asc = natalChart.lagnaSign * 30 + natalChart.lagnaDegree;
+
+    const pdfPlanets = activePDFData?.planets;
+    const pdfAscLon = pdfPlanets?.ascendant?.fullDegree;
+    if (pdfPlanets && typeof pdfAscLon === 'number') {
+      const rebuilt = {};
+      Object.keys(natalChart.planets).forEach(key => {
+        const src = pdfPlanets[key];
+        rebuilt[key] = (src && typeof src.fullDegree === 'number')
+          ? { ...natalChart.planets[key], longitude: src.fullDegree, signIndex: src.signIndex, degree: src.degree, retrograde: !!src.retrograde }
+          : natalChart.planets[key];
+      });
+      planetsSource = rebuilt;
+      asc = pdfAscLon;
+    }
+
     return VARGAS.filter(v => v.num !== 1).map(v => {
-      const c = buildVargaChart(natalChart.planets, asc, v.num);
+      const c = buildVargaChart(planetsSource, asc, v.num);
       return { id: v.id, label: v.label, planets: c.planets, lagnaSign: c.lagnaSign };
     });
-  }, [natalChart]);
+  }, [natalChart, activePDFData]);
 
   const handleSaveCurrentPrediction = () => {
     if (!predictionResults) return;
@@ -983,47 +1156,39 @@ function App() {
     if (!searchQuery.trim()) return;
     setGeocodingLoading(true);
     setGeocodingError('');
+    setGeocodingResults([]);
     try {
       // Primary: Open-Meteo geocoder — returns the IANA timezone, so we can
       // compute the true historical UTC offset (incl. DST) at the birth moment.
-      let place = null;
+      // Ask for several candidates and let the user disambiguate.
+      let results = [];
       try {
-        const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=1&format=json`);
+        const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=8&format=json`);
         const d = await r.json();
         if (d?.results?.length) {
-          const it = d.results[0];
-          place = {
+          results = d.results.map(it => ({
             name: [it.name, it.admin1, it.country].filter(Boolean).join(', '),
             lat: it.latitude, lon: it.longitude, tzId: it.timezone || null,
-          };
+          }));
         }
       } catch { /* fall through to Nominatim */ }
 
-      if (!place) {
-        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
+      // Fallback: Nominatim (no IANA timezone — offset falls back to longitude).
+      if (!results.length) {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=8`);
         const data = await response.json();
-        if (data && data.length > 0) {
-          place = { name: data[0].display_name, lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), tzId: null };
+        if (Array.isArray(data)) {
+          results = data.map(row => ({
+            name: row.display_name,
+            lat: parseFloat(row.lat), lon: parseFloat(row.lon), tzId: null,
+          }));
         }
       }
 
-      if (place) {
-        setBirthDetails(prev => {
-          // True offset at the birth date when we know the IANA zone;
-          // otherwise fall back to the old longitude estimate.
-          const offset = place.tzId && isValidTimeZone(place.tzId)
-            ? offsetForLocalTime(place.tzId, prev.date, prev.time)
-            : null;
-          return {
-            ...prev,
-            placeName: place.name,
-            latitude: place.lat,
-            longitude: place.lon,
-            timezone: offset !== null ? offset : Math.round((place.lon / 15) * 2) / 2,
-            tzId: place.tzId || undefined,
-          };
-        });
-        setSearchQuery('');
+      if (results.length === 1) {
+        applyPlace(results[0]); // unambiguous — apply immediately
+      } else if (results.length > 1) {
+        setGeocodingResults(results); // let the user pick the right match
       } else {
         setGeocodingError('No results found. Please check spelling or enter coordinates manually.');
       }
@@ -1033,6 +1198,27 @@ function App() {
     } finally {
       setGeocodingLoading(false);
     }
+  };
+
+  // Apply a chosen geocoder match: sets coords, IANA zone id, and the true
+  // historical UTC offset (incl. DST) at the birth moment when the zone is known.
+  const applyPlace = (place) => {
+    setBirthDetails(prev => {
+      const offset = place.tzId && isValidTimeZone(place.tzId)
+        ? offsetForLocalTime(place.tzId, prev.date, prev.time)
+        : null;
+      return {
+        ...prev,
+        placeName: place.name,
+        latitude: place.lat,
+        longitude: place.lon,
+        timezone: offset !== null ? offset : Math.round((place.lon / 15) * 2) / 2,
+        tzId: place.tzId || undefined,
+      };
+    });
+    setSearchQuery('');
+    setGeocodingResults([]);
+    setGeocodingError('');
   };
 
   // When the birth date/time changes and we know the place's IANA timezone,
@@ -1335,6 +1521,11 @@ function App() {
         <AdminDashboard onClose={() => setShowAdmin(false)} />
       )}
 
+      {/* Claude chat over saved profiles (admin accounts only) */}
+      {showClaudeChat && isAdmin && (
+        <ClaudeChat onClose={() => setShowClaudeChat(false)} />
+      )}
+
       {/* Enlarged chart viewer with prev/next across all charts */}
       {(() => {
         if (!zoomId) return null;
@@ -1382,6 +1573,13 @@ function App() {
                 onClick={() => setShowAdmin(true)}
                 title="Admin dashboard — users & profiles"
               >🛡 Admin</button>
+            )}
+            {isAdmin && (
+              <button
+                className="theme-toggle"
+                onClick={() => setShowClaudeChat(true)}
+                title="Ask AI about your saved profiles"
+              >✦ Ask AI</button>
             )}
             <button
               className="theme-toggle"
@@ -1433,6 +1631,15 @@ function App() {
                         Email transit alerts <span style={{ opacity: 0.6 }}>(beta)</span>
                       </label>
                       <button className="user-pop-signout" onClick={handleSignOut}>Sign Out</button>
+                      <button
+                        className="user-pop-signout"
+                        style={{ color: '#dc2626', borderTop: '1px solid rgba(220,38,38,0.2)' }}
+                        onClick={handleDeleteAccountData}
+                        disabled={deletingAccount}
+                        title="Permanently erase all your data from this app"
+                      >
+                        {deletingAccount ? 'Deleting…' : 'Delete my data'}
+                      </button>
                     </div>
                   </>
                 )}
@@ -1536,6 +1743,26 @@ function App() {
           </form>
 
           {geocodingError && <p className="error-message">{geocodingError}</p>}
+
+          {geocodingResults.length > 0 && (
+            <ul className="geocode-results" role="listbox" aria-label="Matching places">
+              {geocodingResults.map((place, i) => (
+                <li key={`${place.lat},${place.lon},${i}`}>
+                  <button
+                    type="button"
+                    className="geocode-result-btn"
+                    onClick={() => applyPlace(place)}
+                  >
+                    <span className="geocode-result-name">{place.name}</span>
+                    <span className="geocode-result-meta">
+                      {place.lat.toFixed(2)}°, {place.lon.toFixed(2)}°
+                      {place.tzId ? ` · ${place.tzId}` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
 
           <div className="separator"></div>
 
@@ -1812,6 +2039,15 @@ function App() {
       {showTopBtn && (
         <button className="back-to-top" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title="Back to top">↑</button>
       )}
+
+      {/* Phone navigation. Always mounted; CSS hides it above 768px, where the
+          original .tab-menu strip is shown instead. */}
+      <MobileNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        moreOpen={showMoreSheet}
+        setMoreOpen={setShowMoreSheet}
+      />
     </div>
   );
 }

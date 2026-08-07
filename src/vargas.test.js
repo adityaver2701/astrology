@@ -15,6 +15,13 @@ describe('divisionalPosition', () => {
     expect(sign(30, 9)).toBe(9);   // Taurus 1st navamsa = Capricorn (fixed → 9th)
   });
 
+  it('D9 boundary: Capricorn 26°56′ (AstroSage ASC) → Virgo, not Leo', () => {
+    // Regression for Aditya Verma's report. Capricorn = 270°; 26.94° in → 296.94°.
+    // The 9th navamsa of Capricorn starts at 26.667°, so this must be Virgo (5).
+    expect(sign(296.94, 9)).toBe(5); // Virgo
+    expect(sign(296.60, 9)).toBe(4); // just below the boundary → Leo (shows the knife-edge)
+  });
+
   it('D2 Hora only yields Cancer(3) or Leo(4)', () => {
     expect(sign(5, 2)).toBe(4);    // Aries (odd) first half → Leo
     expect(sign(20, 2)).toBe(3);   // Aries second half → Cancer

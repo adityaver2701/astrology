@@ -53,13 +53,15 @@ export default function HistoricalTransitsTab({
                       <tbody>
                         {historicalTransits.map((tr, index) => {
                           const toSign = SIGNS.find(s => s.name === tr.toSignName);
+                          // data-label drives the stacked-card layout under
+                          // 768px — see .table-responsive rules in index.css
                           return (
                             <tr key={index}>
-                              <td><strong>{new Date(tr.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</strong></td>
-                              <td className="text-muted">{tr.fromSignName} ({SIGNS[tr.fromSign].sanskrit})</td>
-                              <td className="text-highlight">{tr.toSignName} ({SIGNS[tr.toSign].sanskrit})</td>
-                              <td>{toSign ? toSign.element : ''}</td>
-                              <td>{toSign ? toSign.nature : ''}</td>
+                              <td data-label="Date of Transit"><strong>{new Date(tr.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</strong></td>
+                              <td data-label="Left Sign" className="text-muted">{tr.fromSignName} ({SIGNS[tr.fromSign].sanskrit})</td>
+                              <td data-label="Entered Sign" className="text-highlight">{tr.toSignName} ({SIGNS[tr.toSign].sanskrit})</td>
+                              <td data-label="Sign Element">{toSign ? toSign.element : ''}</td>
+                              <td data-label="Sign Quality">{toSign ? toSign.nature : ''}</td>
                             </tr>
                           );
                         })}

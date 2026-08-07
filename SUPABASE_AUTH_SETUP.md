@@ -51,9 +51,15 @@ create policy "astro_sync admin read" on public.astro_sync
 --    Files live under  <user_id>/<filename>  so the folder name
 --    is the owner's id — that's what the policies check.
 -- ─────────────────────────────────────────────────────────────
-insert into storage.buckets (id, name, public)
-values ('vedic-reports', 'vedic-reports', false)
-on conflict (id) do nothing;
+-- file_size_limit + allowed_mime_types are the SERVER-SIDE enforcement: they
+-- apply even if someone scripts uploads with the anon key directly, bypassing
+-- the app's client-side checks. Keep file_size_limit in sync with
+-- MAX_REPORT_BYTES in src/cloudSync.js.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('vedic-reports', 'vedic-reports', false, 15728640, array['application/pdf'])
+on conflict (id) do update
+  set file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
 
 create policy "reports own read" on storage.objects
   for select using (
@@ -96,6 +102,24 @@ just **Create Account → Sign In**. No keys to paste.
 - The browser cache (localStorage) is wiped on **Sign Out**, so nothing leaks to
   the next person on a shared computer. The database policies are the real
   guarantee; the cache wipe is belt-and-suspenders.
+
+## Deleting a user's data
+
+Users can erase everything the app collected about them from the account menu
+(**Delete my data**): it removes their private PDF files and their `astro_sync`
+row (birth details, profiles, life events, notes, email). This runs with the
+anon key under the owner `delete` RLS policies, so a user can only delete their
+own data.
+
+Removing the login record itself (`auth.users` — email + bcrypt password hash)
+requires the **service-role** key and cannot be done from the browser. To honour
+a full account-deletion request, run this once in the SQL editor (or via the
+Admin API) after the user has cleared their data:
+
+```sql
+-- Service role only. Cascade drops the astro_sync row too (FK on delete cascade).
+delete from auth.users where email = 'user@example.com';
+```
 
 ## Saving your `VedicReport...pdf`
 

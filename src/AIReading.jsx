@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { getSession } from './cloudSync';
+import { apiUrl } from './apiBase';
 
 // ── AI Reading card ──────────────────────────────────────────────────────
 // Sends a compact chart summary to the /api/interpret Worker route (Cloudflare
@@ -29,7 +30,7 @@ export default function AIReading({ summary, birth, disabled }) {
     setLoading(true);
     try {
       const session = await getSession();
-      const res = await fetch('/api/interpret', {
+      const res = await fetch(apiUrl('/api/interpret'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

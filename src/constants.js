@@ -56,17 +56,31 @@ export const PLANET_NAMES = {
   ketu: 'Ketu (South Node)'
 };
 
-// Tab navigation config (icons + descriptions; keys 1-8 jump between tabs)
+// Tab navigation config (icons + descriptions; keys 1-8 jump between tabs).
+//
+// `short` is the label used by the mobile bottom bar, where there is room for
+// roughly 10 characters under an icon — the full `label` wraps to three lines
+// and becomes unreadable at that size.
+//
+// `primary: true` marks the four tabs pinned to the bottom bar on phones. The
+// rest live behind the "More" sheet. Exactly four must be primary: with the
+// More button that fills a five-slot bar, which is the most Android can show
+// without the targets dropping under the 48dp minimum.
 export const TABS = [
-  { id: 'birth-chart',         icon: '☉', label: 'Birth Details & Trik Bhava',    desc: 'Natal planet positions, dignities, nakshatras and karmic 6-8-12 house analysis.' },
-  { id: 'interactive-chart',   icon: '◈', label: 'Interactive Kundali',            desc: 'North-Indian chart with live transit overlay — drag planets or scrub the timeline.' },
-  { id: 'historical-transits', icon: '↺', label: 'Historical Transits (50 Yr)',    desc: 'Scan five decades of a planet’s sign ingresses through your houses.' },
-  { id: 'predictions',         icon: '✦', label: 'Life Events Matcher',            desc: 'Match logged life events to transit signatures and project future reoccurrences.' },
-  { id: 'alignment-transits',  icon: '✧', label: 'Degree & Nakshatra Transits',    desc: 'Exact-degree and nakshatra alignment windows over your natal points.' },
-  { id: 'dasha-system',        icon: '☽', label: 'Vimshottari Dasha',              desc: 'Full Mahadasha → Antardasha → Pratyantar timeline from your Moon nakshatra.' },
-  { id: 'panchanga',           icon: '🗓', label: 'Panchanga',                      desc: 'Tithi, vara, nakshatra, yoga and karana for any date — the five limbs of the Vedic day.' },
-  { id: 'compatibility',       icon: '♡', label: 'Compatibility',                  desc: 'Ashtakoota (36-guna) matching between any two saved profiles.' },
+  { id: 'birth-chart',         icon: '☉', short: 'Chart',    primary: true,  label: 'Birth Details & Trik Bhava',    desc: 'Natal planet positions, dignities, nakshatras and karmic 6-8-12 house analysis.' },
+  { id: 'interactive-chart',   icon: '◈', short: 'Kundali',  primary: true,  label: 'Interactive Kundali',            desc: 'North-Indian chart with live transit overlay — drag planets or scrub the timeline.' },
+  { id: 'historical-transits', icon: '↺', short: 'History',  primary: false, label: 'Historical Transits (50 Yr)',    desc: 'Scan five decades of a planet’s sign ingresses through your houses.' },
+  { id: 'predictions',         icon: '✦', short: 'Events',   primary: true,  label: 'Life Events Matcher',            desc: 'Match logged life events to transit signatures and project future reoccurrences.' },
+  { id: 'alignment-transits',  icon: '✧', short: 'Degrees',  primary: false, label: 'Degree & Nakshatra Transits',    desc: 'Exact-degree and nakshatra alignment windows over your natal points.' },
+  { id: 'dasha-system',        icon: '☽', short: 'Dasha',    primary: true,  label: 'Vimshottari Dasha',              desc: 'Full Mahadasha → Antardasha → Pratyantar timeline from your Moon nakshatra.' },
+  { id: 'panchanga',           icon: '🗓', short: 'Panchanga', primary: false, label: 'Panchanga',                     desc: 'Tithi, vara, nakshatra, yoga and karana for any date — the five limbs of the Vedic day.' },
+  { id: 'compatibility',       icon: '♡', short: 'Match',    primary: false, label: 'Compatibility',                  desc: 'Ashtakoota (36-guna) matching between any two saved profiles.' },
 ];
+
+/** The four tabs pinned to the mobile bottom bar. */
+export const PRIMARY_TABS = TABS.filter(t => t.primary);
+/** Everything else — shown in the "More" sheet. */
+export const SECONDARY_TABS = TABS.filter(t => !t.primary);
 
 // Helper: format degrees to standard zodiac degrees minutes (e.g. 14°25')
 export const formatDegrees = (deg) => {

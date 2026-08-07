@@ -508,6 +508,40 @@ body {
 .retrograde-indicator { color: var(--amber); font-weight: 700; }
 .error-message        { color: var(--red); font-size: 12px; margin: 6px 0 0; }
 
+/* GEOCODER RESULTS PICKER */
+.geocode-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 4px;
+  border: 1px solid var(--border-gold-md);
+  border-radius: 8px;
+  background: var(--bg-subcard);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.geocode-results li { margin: 0; }
+.geocode-result-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.geocode-result-btn:hover,
+.geocode-result-btn:focus-visible {
+  background: var(--bg-input);
+  outline: none;
+}
+.geocode-result-name { font-size: 13px; font-weight: 600; }
+.geocode-result-meta { font-size: 11px; color: var(--text-muted); }
+
 /* KUNDALI CHART */
 .chart-comparison-view {
   display: grid;
@@ -2550,6 +2584,7 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
   /* Larger tap targets; 16px inputs stop iOS from zooming on focus */
   .btn { padding: 11px 18px; }
   .text-input, select.text-input, input.text-input { font-size: 16px; }
+  .chat-input { font-size: 16px; }
 
   /* Modals use more of the small screen */
   .pm-overlay { padding: 10px; }
@@ -2888,6 +2923,38 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 .admin-profile-sub { font-size: 11px; color: var(--text-muted); }
 .admin-foot { font-size: 11px; color: var(--text-faint); text-align: center; margin-top: 14px; }
 
+/* ── Claude chat (admin) ──────────────────────────────────────────────── */
+.chat-panel { max-width: 640px; display: flex; flex-direction: column; }
+.chat-scroll {
+  flex: 1; min-height: 260px; max-height: 55vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 10px;
+}
+.chat-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 28px 18px; }
+.chat-empty p { margin: 0 0 10px; }
+.chat-empty-examples { font-size: 12px; color: var(--text-faint); }
+.chat-msg { display: flex; }
+.chat-msg.user { justify-content: flex-end; }
+.chat-msg.assistant { justify-content: flex-start; }
+.chat-bubble {
+  max-width: 85%; border-radius: 12px; padding: 8px 12px; font-size: 13.5px; line-height: 1.55;
+  border: 1px solid var(--border-gold); background: var(--bg-subcard); color: var(--text-primary);
+}
+.chat-msg.user .chat-bubble {
+  background: var(--violet-soft, rgba(124, 58, 237, 0.08));
+  border-color: var(--border-gold-md);
+}
+.chat-bubble p { margin: 0 0 8px; white-space: pre-wrap; }
+.chat-bubble p:last-child { margin-bottom: 0; }
+.chat-typing { color: var(--text-muted); font-style: italic; }
+.chat-input-row { display: flex; gap: 8px; align-items: flex-end; margin-top: 4px; }
+.chat-input {
+  flex: 1; resize: none; border: 1px solid var(--border-gold); border-radius: 10px;
+  background: var(--bg-subcard); color: var(--text-primary); font: inherit; font-size: 13.5px;
+  padding: 8px 10px;
+}
+.chat-input:focus { outline: none; border-color: var(--border-gold-hi); }
+.chat-send { align-self: stretch; min-width: 74px; }
+
 /* ── Divisional (varga) charts grid ───────────────────────────────────── */
 .varga-section { margin-top: 16px; }
 .varga-grid {
@@ -2957,3 +3024,366 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 }
 .prepare-flash.ok { color: var(--green); background: rgba(22,163,74,0.10); border: 1px solid rgba(22,163,74,0.25); }
 .prepare-flash.err { color: var(--red); background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.25); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NATIVE ANDROID (Capacitor)
+   Only applies inside the app shell — src/native/index.js puts `is-native`
+   on <html>, so none of this touches the website.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --safe-top: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+  --safe-right: 0px;
+  --keyboard-height: 0px;
+}
+
+/* Edge-to-edge is mandatory from Android 15, so the WebView extends under the
+   status bar and the gesture pill. Pad the app frame instead of the body so
+   backgrounds still bleed to the screen edges. */
+html.is-native body {
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  /* Overscroll bounce reveals the native background and looks like a glitch. */
+  overscroll-behavior-y: none;
+}
+
+/* Keyboard: `resize: native` shrinks the WebView, but sticky footers still need
+   to clear the inset when the layout can't reflow in time. */
+html.is-native.keyboard-open body {
+  padding-bottom: calc(var(--safe-bottom) + var(--keyboard-height));
+}
+
+/* Long-press text selection and the blue tap flash both feel wrong in an app.
+   Inputs keep selection so copy/paste still works. */
+html.is-native {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+html.is-native body { user-select: none; -webkit-user-select: none; }
+html.is-native input,
+html.is-native textarea,
+html.is-native [contenteditable],
+html.is-native .ai-reading-text,
+html.is-native .chat-message {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Android's WebView zooms the page when a focused input is under 16px. */
+html.is-native input,
+html.is-native select,
+html.is-native textarea { font-size: max(16px, 1em); }
+
+/* 48dp is Google's minimum touch target; several controls are sized for a
+   mouse. Only widen them on the native build so the web layout is untouched. */
+html.is-native button,
+html.is-native .tab-btn,
+html.is-native select { min-height: 44px; }
+html.is-native .chart-zoom-nav { width: 48px; height: 48px; }
+
+/* Momentum scrolling inside the scrollable panels. */
+html.is-native .scroll-panel,
+html.is-native .table-wrap { -webkit-overflow-scrolling: touch; }
+
+/* Offline banner — `is-offline` is toggled by the Network plugin listener. */
+html.is-offline body::before {
+  content: 'Offline — showing your last synced data';
+  position: fixed;
+  top: var(--safe-top);
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  padding: 6px 10px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a1204;
+  background: var(--gold-mid, #c9a227);
+}
+html.is-offline body { padding-top: calc(var(--safe-top) + 28px); }
+
+/* Phone-width refinements. `.card` is gated on `is-native` deliberately: the
+   mobile website already has its own @media rules for that and shouldn't shift.
+   The zoom-modal rules below apply everywhere — at this width the chart next
+   to two 40px nav circles gets squeezed thin either way, web or native. */
+@media (max-width: 480px) {
+  html.is-native .card { border-radius: 12px; }
+  .chart-zoom-body { flex-direction: column; }
+  .chart-zoom-svg { max-width: 100%; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE NAVIGATION + TABLE CARDS
+   Viewport-gated (not native-gated) so the mobile website and the Android app
+   stay identical — that parity is the whole point of the Capacitor setup.
+   Breakpoint 768px: below it, phones get the bottom bar and stacked tables.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Hidden by default; only phones get the bottom bar. */
+.mobile-nav { display: none; }
+
+@media (max-width: 768px) {
+
+  /* ── Bottom tab bar ──────────────────────────────────────────────────── */
+  /* The old scrolling strip showed ~1.5 of 8 tabs with no hint the rest
+     existed. This pins the 4 most-used within thumb reach. */
+  .tab-menu,
+  .tab-hint { display: none; }
+
+  /* Layer order for reference — the bar must sit ABOVE page content but BELOW
+     every overlay, or it floats on top of open dialogs:
+        .mobile-nav             150
+        .guide-overlay          200
+        .chart-zoom-overlay     210
+        .back-to-top            900
+        .mobile-sheet-overlay   950   (above back-to-top so the FAB can't
+                                       punch through the sheet)
+        .pm-overlay            1000   (modals cover everything) */
+  .mobile-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 150;
+    /* --safe-* are set by src/native/ on Android and default to 0 on the web,
+       so the bar clears the gesture pill without hardcoding a device inset. */
+    padding: 4px var(--safe-right, 0px) calc(4px + var(--safe-bottom, 0px)) var(--safe-left, 0px);
+    /* No colour fallbacks anywhere below: every variable is defined in :root
+       and overridden by [data-theme="dark"]. A literal fallback would silently
+       render dark-theme colours in light mode if a name ever changed, which is
+       harder to spot than an obviously unstyled bar. */
+    background: var(--bg-card);
+    border-top: 1px solid var(--border-gold-md);
+    box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.18);
+  }
+
+  .mobile-nav-btn {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    /* 48px is Google's minimum touch target. */
+    min-height: 48px;
+    padding: 6px 2px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s ease;
+  }
+
+  .mobile-nav-icon { font-size: 19px; line-height: 1; }
+  .mobile-nav-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-btn.active { color: var(--gold-bright); }
+  /* Indicator bar across the top of the active item. Explicitly centred —
+     relying on an absolutely-positioned pseudo-element's static position
+     inside a flex column is fragile and shifts with label width. */
+  .mobile-nav-btn.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 26px;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--gold-bright);
+  }
+
+  /* Content must clear the fixed bar, or the last rows sit under it. */
+  .app-container { padding-bottom: calc(78px + var(--safe-bottom, 0px)); }
+  .back-to-top { bottom: calc(74px + var(--safe-bottom, 0px)); }
+
+  /* ── "More" sheet ────────────────────────────────────────────────────── */
+  .mobile-sheet-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    display: flex;
+    align-items: flex-end;
+    background: rgba(0, 0, 0, 0.55);
+    animation: sheetFade 0.16s ease;
+  }
+
+  .mobile-sheet {
+    width: 100%;
+    max-height: 82vh;
+    overflow-y: auto;
+    padding: 8px 12px calc(16px + var(--safe-bottom, 0px));
+    border-radius: 18px 18px 0 0;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border-gold-md);
+    animation: sheetUp 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    outline: none;
+  }
+
+  .mobile-sheet-grip {
+    width: 38px;
+    height: 4px;
+    margin: 4px auto 10px;
+    border-radius: 2px;
+    background: var(--border-gold-md);
+  }
+
+  .mobile-sheet-title {
+    margin: 0 0 10px;
+    padding: 0 4px;
+    font-family: 'Cinzel', serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .mobile-sheet-list { display: flex; flex-direction: column; gap: 2px; }
+
+  .mobile-sheet-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 11px 10px;
+    border: none;
+    border-radius: 10px;
+    background: none;
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-sheet-item:active { background: rgba(202, 138, 4, 0.10); }
+  .mobile-sheet-item.active { background: rgba(202, 138, 4, 0.14); }
+
+  .mobile-sheet-icon {
+    flex-shrink: 0;
+    width: 26px;
+    font-size: 17px;
+    line-height: 1.35;
+    text-align: center;
+    color: var(--gold-mid);
+  }
+
+  .mobile-sheet-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .mobile-sheet-label {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+  /* The old tab strip had no room for these descriptions at all. */
+  .mobile-sheet-desc {
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+
+  @keyframes sheetUp  { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes sheetFade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ── Wide tables become stacked cards ────────────────────────────────── */
+  /* The Birth Chart table is 9 columns and Historical Transits is 5. Even with
+     horizontal scrolling, reading one planet's row meant dragging back and
+     forth and losing track of which row you were on. Each row becomes a card
+     and every cell carries its own column name (from data-label). */
+  .table-responsive { overflow-x: visible; }
+
+  .planetary-table,
+  .transit-results-table,
+  .planetary-table tbody,
+  .transit-results-table tbody,
+  .planetary-table tr,
+  .transit-results-table tr,
+  .planetary-table td,
+  .transit-results-table td {
+    display: block;
+    width: auto;
+  }
+
+  /* Column headings are redundant once each cell is labelled. Kept in the DOM
+     (clipped, not display:none) so screen readers still announce them. */
+  .planetary-table thead,
+  .transit-results-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .planetary-table tr,
+  .transit-results-table tr {
+    margin-bottom: 10px;
+    padding: 4px 2px;
+    border: 1px solid var(--border-gold-md);
+    border-radius: 10px;
+    background: var(--bg-subcard);
+  }
+  .planetary-table tr:hover,
+  .transit-results-table tr:hover { background: var(--bg-subcard); }
+
+  .planetary-table td,
+  .transit-results-table td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 7px 11px;
+    border: none;
+    border-bottom: 1px solid rgba(202, 138, 4, 0.07);
+    font-size: 13px;
+    text-align: right;
+  }
+  .planetary-table td:last-child,
+  .transit-results-table td:last-child { border-bottom: none; }
+
+  .planetary-table td::before,
+  .transit-results-table td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--text-muted);
+  }
+
+  /* First cell is the row's identity (planet name / transit date) — promote it
+     to a card header rather than another label:value line. */
+  .planetary-table td:first-child,
+  .transit-results-table td:first-child {
+    justify-content: flex-start;
+    padding-top: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    text-align: left;
+    color: var(--gold-bright);
+  }
+  .planetary-table td:first-child::before,
+  .transit-results-table td:first-child::before { display: none; }
+
+  /* A cell with no data-label (a table this rule wasn't written for) would
+     otherwise render an empty gap where the label should be. */
+  .planetary-table td:not([data-label])::before,
+  .transit-results-table td:not([data-label])::before { content: none; }
+}

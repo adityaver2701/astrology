@@ -20,7 +20,34 @@ export function initSentry() {
     environment: import.meta.env.MODE,
     // Sample 10% of transactions for performance tracing; raise if you want more.
     tracesSampleRate: 0.1,
+    // Never let the SDK attach IP address, cookies, or request headers/bodies.
+    sendDefaultPii: false,
+    // Belt-and-suspenders scrub: an error string or breadcrumb URL could still
+    // carry an email the user typed, or a Supabase query embedding it. Redact
+    // emails and strip query strings before anything leaves the browser.
+    beforeSend: scrubEvent,
+    beforeBreadcrumb: scrubBreadcrumb,
     // Default integrations already capture unhandled errors and promise
     // rejections — no extra wiring needed.
   });
+}
+
+const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+const redact = (s) =>
+  typeof s === 'string' ? s.replace(EMAIL_RE, '[REDACTED_EMAIL]').replace(/([?&](access_token|token|apikey|email)=)[^&\s]*/gi, '$1[REDACTED]') : s;
+
+function scrubEvent(event) {
+  if (event.message) event.message = redact(event.message);
+  for (const ex of event.exception?.values || []) ex.value = redact(ex.value);
+  if (event.request) {
+    // Drop anything that could carry PII wholesale; keep only a scrubbed URL.
+    event.request = event.request.url ? { url: redact(event.request.url.split('?')[0]) } : undefined;
+  }
+  return event;
+}
+
+function scrubBreadcrumb(crumb) {
+  if (crumb.message) crumb.message = redact(crumb.message);
+  if (crumb.data?.url) crumb.data.url = redact(String(crumb.data.url).split('?')[0]);
+  return crumb;
 }

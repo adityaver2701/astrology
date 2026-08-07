@@ -142,7 +142,11 @@ export default function KundaliChart({ planets: planetsList, lagnaSign, draggabl
                       fontSize="17"
                       fontWeight="800"
                       fontFamily="monospace, sans-serif"
-                      style={draggable ? { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' } : undefined}
+                      // touchAction: 'none' stops the browser from treating a drag on this
+                      // glyph as a page-scroll gesture. React registers touchstart/touchmove
+                      // as passive by default, so calling preventDefault() in onTouchStart
+                      // below has no effect — the CSS property is what actually blocks it.
+                      style={draggable ? { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'none' } : undefined}
                       onMouseDown={draggable ? (e) => {
                         e.preventDefault();
                         const r = e.currentTarget.ownerSVGElement?.getBoundingClientRect();

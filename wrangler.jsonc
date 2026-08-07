@@ -14,7 +14,12 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // Run the Worker before serving static assets so every response — including
+    // the SPA's HTML/JS/CSS — passes through withSecurityHeaders() and gets the
+    // security headers (CSP, HSTS, X-Frame-Options, …). Without this, matching
+    // assets are served directly by the asset server and bypass the Worker.
+    "run_worker_first": true
   },
   "ai": { "binding": "AI" },
 
@@ -26,7 +31,18 @@
 
   "vars": {
     "SUPABASE_URL": "https://chpexdmbwbtdyqzfvmow.supabase.co",
-    "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocGV4ZG1id2J0ZHlxemZ2bW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNzgzNTgsImV4cCI6MjA5Njg1NDM1OH0.1h3Q8R6CXi2PQmjfU41ERADVemfEkHkhhvI5axv746g"
+    "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocGV4ZG1id2J0ZHlxemZ2bW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNzgzNTgsImV4cCI6MjA5Njg1NDM1OH0.1h3Q8R6CXi2PQmjfU41ERADVemfEkHkhhvI5axv746g",
+    // Accounts allowed to use the Claude chat (POST /api/chat), comma-separated.
+    // Keep in sync with VITE_ADMIN_EMAILS on the frontend.
+    "ADMIN_EMAILS": "penetacle@gmail.com"
+    // The admin AI chat (POST /api/chat) uses Claude only if this OPTIONAL
+    // secret is set; otherwise it falls back to the free Groq → Workers AI chain:
+    //   npx wrangler secret put ANTHROPIC_API_KEY  — https://platform.claude.com
+    // Optional: use Groq (free tier) as the primary AI-reading provider,
+    // falling back to Workers AI. Override the default model if desired:
+    //   "GROQ_MODEL": "llama-3.3-70b-versatile"
+    // and store the key as a secret (never commit it):
+    //   npx wrangler secret put GROQ_API_KEY   — get one at https://console.groq.com/keys
     // For transit-alert emails also set (see worker/alerts.js):
     //   "ALERT_FROM": "Astro Alerts <alerts@yourdomain.com>"
     // and store the secrets (never commit them):
