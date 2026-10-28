@@ -9,7 +9,10 @@ test.describe('app boot', () => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (msg) => {
-      if (msg.type() === 'error') errors.push(msg.text());
+      if (msg.type() !== 'error') return;
+      // Cloudflare's injected analytics beacon fails CORS on its own — not our code.
+      if (/cloudflareinsights\.com/.test(msg.text() + msg.location().url)) return;
+      errors.push(msg.text());
     });
 
     await page.goto('/');

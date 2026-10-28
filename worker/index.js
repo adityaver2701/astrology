@@ -198,9 +198,10 @@ const CSP = [
   "default-src 'self'",
   // 'self' plus the Cloudflare Web Analytics beacon that index.html loads.
   "script-src 'self' https://static.cloudflareinsights.com",
-  "style-src 'self' 'unsafe-inline'",
+  // Google Fonts: stylesheet from googleapis, font files from gstatic (src/index.css).
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data: blob:",
-  "font-src 'self'",
+  "font-src 'self' https://fonts.gstatic.com",
   // 'self' also covers the Android app's own /api and /ota calls back to this
   // Worker; the app's local WebView origin isn't governed by this header.
   "connect-src 'self' https://astrology.penetacle.workers.dev https://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://geocoding-api.open-meteo.com https://nominatim.openstreetmap.org https://cloudflareinsights.com",
