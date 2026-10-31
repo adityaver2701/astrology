@@ -9,11 +9,14 @@
 //                          profiles. Claude when ANTHROPIC_API_KEY is set,
 //                          else free Groq → Workers AI (see ./chat.js).
 //   GET  /api/health     → Supabase reachability probe for uptime monitors
+//   POST /api/push/register → store this device's FCM token as an Azure
+//                          Notification Hubs installation (see ./push.js)
 // Everything else falls through to static assets (SPA fallback handled by the
 // assets binding's not_found_handling = "single-page-application").
 
 import { sendTransitAlerts } from './alerts.js';
 import { handleChat } from './chat.js';
+import { handlePushRegister } from './push.js';
 
 // Cloudflare Workers AI models — tried in order; if one is deprecated or
 // unavailable we fall through to the next. These are the fallback tier.
@@ -177,13 +180,14 @@ async function route(request, env, ctx) {
   if (url.pathname === '/api/health') return handleHealth(env);
   // Per-IP throttle on the (potentially expensive) AI POST endpoints. Auth
   // login/signup/reset/OTP live on Supabase, which rate-limits them itself.
-  if (url.pathname === '/api/interpret' || url.pathname === '/api/chat') {
+  if (url.pathname === '/api/interpret' || url.pathname === '/api/chat' || url.pathname === '/api/push/register') {
     if (request.method === 'POST' && !(await checkIpRateLimit(env, request))) {
       return json({ error: 'Too many requests — please slow down and try again shortly.' }, 429);
     }
   }
   if (url.pathname === '/api/interpret') return handleInterpret(request, env, ctx);
   if (url.pathname === '/api/chat') return handleChat(request, env, ctx);
+  if (url.pathname === '/api/push/register') return handlePushRegister(request, env, json);
   if (url.pathname.startsWith('/api/')) return json({ error: 'Unknown endpoint' }, 404);
   return env.ASSETS.fetch(request);
 }

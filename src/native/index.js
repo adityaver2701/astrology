@@ -10,6 +10,7 @@
 //   3. Android hardware back button → close modals, then exit.
 //   4. Resume hooks → re-pull cloud data and check for a live update, so the
 //      app matches whatever the website is showing.
+//   5. Push notifications (FCM → Azure Notification Hubs), see ./push.js.
 //
 // The app dispatches/consumes two custom events on `window`:
 //   'astro:resume'  → fired when the app returns to the foreground (or the web
@@ -46,6 +47,11 @@ export async function initNative() {
     setupNetwork(),
     hideSplash(),
   ]);
+
+  // Push: permission prompt + FCM token → /api/push/register. Never blocks boot.
+  import('./push.js')
+    .then(({ initPush }) => initPush())
+    .catch((err) => console.warn('native: push init skipped', err));
 
   // Live updates run last. markAppReady() is the important part — without it
   // the updater plugin assumes this bundle failed to boot and rolls it back.

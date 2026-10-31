@@ -34,7 +34,10 @@
     "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNocGV4ZG1id2J0ZHlxemZ2bW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNzgzNTgsImV4cCI6MjA5Njg1NDM1OH0.1h3Q8R6CXi2PQmjfU41ERADVemfEkHkhhvI5axv746g",
     // Accounts allowed to use the Claude chat (POST /api/chat), comma-separated.
     // Keep in sync with VITE_ADMIN_EMAILS on the frontend.
-    "ADMIN_EMAILS": "penetacle@gmail.com"
+    "ADMIN_EMAILS": "penetacle@gmail.com",
+    // Azure Notification Hub used by POST /api/push/register (worker/push.js).
+    // Also needs: npx wrangler secret put NH_CONNECTION_STRING  (Listen policy)
+    "NH_HUB_NAME": "astrology-alerts"
     // The admin AI chat (POST /api/chat) uses Claude only if this OPTIONAL
     // secret is set; otherwise it falls back to the free Groq → Workers AI chain:
     //   npx wrangler secret put ANTHROPIC_API_KEY  — https://platform.claude.com
