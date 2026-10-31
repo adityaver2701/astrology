@@ -9,7 +9,9 @@
     // 0 6 * * *  — daily ping keeps the free-tier Supabase project from auto-pausing.
     // 0 7 * * 1  — weekly transit-alert emails (no-op until RESEND_API_KEY,
     //              SUPABASE_SERVICE_ROLE_KEY secrets and ALERT_FROM are set; see worker/alerts.js).
-    "crons": ["0 6 * * *", "0 7 * * 1"]
+    // 30 13 * * * — daily push alerts at 19:00 IST (worker/pushAlerts.js; needs the
+    //              NH_SEND_CONNECTION_STRING + SUPABASE_SERVICE_ROLE_KEY secrets).
+    "crons": ["0 6 * * *", "0 7 * * 1", "30 13 * * *"]
   },
   "assets": {
     "directory": "./dist",
@@ -37,7 +39,13 @@
     "ADMIN_EMAILS": "penetacle@gmail.com",
     // Azure Notification Hub used by POST /api/push/register (worker/push.js).
     // Also needs: npx wrangler secret put NH_CONNECTION_STRING  (Listen policy)
-    "NH_HUB_NAME": "astrology-alerts"
+    "NH_HUB_NAME": "astrology-alerts",
+    // Azure Document Intelligence (F0) for the PDF fallback (worker/docintel.js).
+    // Also needs: npx wrangler secret put DOCINTEL_KEY
+    "DOCINTEL_ENDPOINT": "https://astrology-docintel-35a4.cognitiveservices.azure.com/",
+    // Azure AI Search (free) for RAG in /api/chat (worker/search.js).
+    // Also needs: npx wrangler secret put AZURE_SEARCH_QUERY_KEY  (a query key, not admin)
+    "AZURE_SEARCH_ENDPOINT": "https://astrology-search-35a4.search.windows.net"
     // The admin AI chat (POST /api/chat) uses Claude only if this OPTIONAL
     // secret is set; otherwise it falls back to the free Groq → Workers AI chain:
     //   npx wrangler secret put ANTHROPIC_API_KEY  — https://platform.claude.com

@@ -23,6 +23,7 @@ import {
   getCurrentDasha,
   SIGNS,
 } from '../src/astrologyEngine.js';
+import { searchInterpretations, formatPassages } from './search.js';
 
 const CLAUDE_MODEL = 'claude-opus-4-8';
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -108,7 +109,10 @@ export async function handleChat(request, env, ctx) {
     }
   } catch { /* fall through — chat still works, just without profile context */ }
 
-  const profileContext = buildProfileContext(profiles);
+  // RAG: pull the most relevant interpretation passages for the latest
+  // question from Azure AI Search (no-op if not configured).
+  const passages = await searchInterpretations(env, messages[messages.length - 1].content, 3);
+  const profileContext = buildProfileContext(profiles) + formatPassages(passages);
 
   // ── Provider 1: Claude (only when the paid API key is configured) ────────
   if (env.ANTHROPIC_API_KEY) {

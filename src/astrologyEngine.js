@@ -518,6 +518,106 @@ export function matchLifeEventTransits(birthDetails, eventStartDate, eventEndDat
 }
 
 // Scans future date range for transit alignment matches
+// Minimum score (0-100) for a date to count as a recurrence of a life event's
+// transit signature. Shared by predictFutureReoccurrences and the push alerts.
+export const LIFE_EVENT_MATCH_THRESHOLD = 60;
+
+/**
+ * Score how closely the Saturn/Jupiter/Rahu/Ketu transits on `date` repeat a
+ * past life event's signature (house placements + natal conjunctions).
+ * @returns {{score: number, transits: object}}
+ */
+export function scoreTransitMatch(date, eventSignature, natalLagnaSign, natalPlanets) {
+  const testDate = date instanceof Date ? date : new Date(date);
+  const jd = getJulianDate(testDate);
+  const T = (jd - 2451545.0) / 36525.0;
+  const ayanamsha = getLahiriAyanamsha(T);
+
+  // Compute transits of Saturn, Jupiter, Rahu, Ketu
+  const transits = {};
+  const targetKeys = ['saturn', 'jupiter', 'rahu', 'ketu'];
+
+  targetKeys.forEach(key => {
+    let tropLon;
+    if (key === 'rahu') tropLon = getRahuLongitudeTropical(T);
+    else if (key === 'ketu') tropLon = normalize360(getRahuLongitudeTropical(T) + 180);
+    else tropLon = getPlanetLongitudeTropical(key, jd);
+
+    const sidLon = normalize360(tropLon - ayanamsha);
+    const signIndex = Math.floor(sidLon / 30);
+    const house = getHouseFromLagna(signIndex, natalLagnaSign);
+
+    const conjunctions = [];
+    Object.keys(natalPlanets).forEach(nKey => {
+      const natalInfo = natalPlanets[nKey];
+      let diff = Math.abs(sidLon - natalInfo.longitude);
+      if (diff > 180) diff = 360 - diff;
+      if (diff <= 10) conjunctions.push(nKey);
+    });
+
+    transits[key] = {
+      signIndex,
+      house,
+      conjunctions,
+      longitude: sidLon
+    };
+  });
+
+  // Score calculation
+  let totalScore = 0;
+  
+  // Weightings:
+  // Saturn House Match: 35%
+  // Jupiter House Match: 25%
+  // Rahu House Match (or reverse axis): 20% (15% if reversed)
+  // Ketu House Match (or reverse axis): 10% (8% if reversed)
+  // Conjunction Matches: 10%
+
+  // Saturn House Match
+  if (transits.saturn.house === eventSignature.saturn.house) {
+    totalScore += 35;
+  }
+  // Jupiter House Match
+  if (transits.jupiter.house === eventSignature.jupiter.house) {
+    totalScore += 25;
+  }
+  // Rahu / Ketu Axis Match
+  if (transits.rahu.house === eventSignature.rahu.house) {
+    totalScore += 20;
+  } else if (transits.rahu.house === eventSignature.ketu.house) {
+    totalScore += 15; // Swapped axis
+  }
+
+  if (transits.ketu.house === eventSignature.ketu.house) {
+    totalScore += 10;
+  } else if (transits.ketu.house === eventSignature.rahu.house) {
+    totalScore += 8; // Swapped axis
+  }
+
+  // Conjunction Match (10% max)
+  let conjunctMatchCount = 0;
+  let expectedConjunctCount = 0;
+
+  targetKeys.forEach(key => {
+    const expConjuncts = eventSignature[key].conjunctions.map(c => c.planet);
+    expectedConjunctCount += expConjuncts.length;
+    expConjuncts.forEach(planet => {
+      if (transits[key].conjunctions.includes(planet)) {
+        conjunctMatchCount++;
+      }
+    });
+  });
+
+  if (expectedConjunctCount > 0) {
+    totalScore += (conjunctMatchCount / expectedConjunctCount) * 10;
+  } else {
+    // If no conjunctions occurred in original event, we reward matching a lack of heavy conjunctions
+    totalScore += 10;
+  }
+
+  return { score: totalScore, transits };
+}
+
 export function predictFutureReoccurrences(birthDetails, eventSignature, natalLagnaSign, natalPlanets, startYear = 2026, endYear = 2056) {
   const matches = [];
   const startMs = new Date(startYear, 0, 1).getTime();
@@ -528,94 +628,9 @@ export function predictFutureReoccurrences(birthDetails, eventSignature, natalLa
   let currentMs = startMs;
 
   while (currentMs <= endMs) {
-    const testDate = new Date(currentMs);
-    const jd = getJulianDate(testDate);
-    const T = (jd - 2451545.0) / 36525.0;
-    const ayanamsha = getLahiriAyanamsha(T);
+    const { score: totalScore, transits } = scoreTransitMatch(new Date(currentMs), eventSignature, natalLagnaSign, natalPlanets);
 
-    // Compute transits of Saturn, Jupiter, Rahu, Ketu
-    const transits = {};
-    const targetKeys = ['saturn', 'jupiter', 'rahu', 'ketu'];
-
-    targetKeys.forEach(key => {
-      let tropLon;
-      if (key === 'rahu') tropLon = getRahuLongitudeTropical(T);
-      else if (key === 'ketu') tropLon = normalize360(getRahuLongitudeTropical(T) + 180);
-      else tropLon = getPlanetLongitudeTropical(key, jd);
-
-      const sidLon = normalize360(tropLon - ayanamsha);
-      const signIndex = Math.floor(sidLon / 30);
-      const house = getHouseFromLagna(signIndex, natalLagnaSign);
-
-      const conjunctions = [];
-      Object.keys(natalPlanets).forEach(nKey => {
-        const natalInfo = natalPlanets[nKey];
-        let diff = Math.abs(sidLon - natalInfo.longitude);
-        if (diff > 180) diff = 360 - diff;
-        if (diff <= 10) conjunctions.push(nKey);
-      });
-
-      transits[key] = {
-        signIndex,
-        house,
-        conjunctions,
-        longitude: sidLon
-      };
-    });
-
-    // Score calculation
-    let totalScore = 0;
-    
-    // Weightings:
-    // Saturn House Match: 35%
-    // Jupiter House Match: 25%
-    // Rahu House Match (or reverse axis): 20% (15% if reversed)
-    // Ketu House Match (or reverse axis): 10% (8% if reversed)
-    // Conjunction Matches: 10%
-
-    // Saturn House Match
-    if (transits.saturn.house === eventSignature.saturn.house) {
-      totalScore += 35;
-    }
-    // Jupiter House Match
-    if (transits.jupiter.house === eventSignature.jupiter.house) {
-      totalScore += 25;
-    }
-    // Rahu / Ketu Axis Match
-    if (transits.rahu.house === eventSignature.rahu.house) {
-      totalScore += 20;
-    } else if (transits.rahu.house === eventSignature.ketu.house) {
-      totalScore += 15; // Swapped axis
-    }
-
-    if (transits.ketu.house === eventSignature.ketu.house) {
-      totalScore += 10;
-    } else if (transits.ketu.house === eventSignature.rahu.house) {
-      totalScore += 8; // Swapped axis
-    }
-
-    // Conjunction Match (10% max)
-    let conjunctMatchCount = 0;
-    let expectedConjunctCount = 0;
-
-    targetKeys.forEach(key => {
-      const expConjuncts = eventSignature[key].conjunctions.map(c => c.planet);
-      expectedConjunctCount += expConjuncts.length;
-      expConjuncts.forEach(planet => {
-        if (transits[key].conjunctions.includes(planet)) {
-          conjunctMatchCount++;
-        }
-      });
-    });
-
-    if (expectedConjunctCount > 0) {
-      totalScore += (conjunctMatchCount / expectedConjunctCount) * 10;
-    } else {
-      // If no conjunctions occurred in original event, we reward matching a lack of heavy conjunctions
-      totalScore += 10;
-    }
-
-    if (totalScore >= 60) {
+    if (totalScore >= LIFE_EVENT_MATCH_THRESHOLD) {
       matches.push({
         date: new Date(currentMs),
         score: Math.round(totalScore),

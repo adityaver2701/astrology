@@ -11,12 +11,20 @@
 //   GET  /api/health     → Supabase reachability probe for uptime monitors
 //   POST /api/push/register → store this device's FCM token as an Azure
 //                          Notification Hubs installation (see ./push.js)
+//   POST /api/push/preview → tomorrow's alerts for the caller (admins can
+//                          send them to themselves) — see ./pushAlerts.js
+//   POST /api/docintel/layout → PDF text via Azure Document Intelligence,
+//                          fallback for src/pdfParser.js (see ./docintel.js)
+//   GET  /api/search?q=   → RAG retrieval from Azure AI Search (./search.js)
 // Everything else falls through to static assets (SPA fallback handled by the
 // assets binding's not_found_handling = "single-page-application").
 
 import { sendTransitAlerts } from './alerts.js';
 import { handleChat } from './chat.js';
 import { handlePushRegister } from './push.js';
+import { runPushAlerts, handlePushPreview } from './pushAlerts.js';
+import { handleDocIntelLayout } from './docintel.js';
+import { handleSearch } from './search.js';
 
 // Cloudflare Workers AI models — tried in order; if one is deprecated or
 // unavailable we fall through to the next. These are the fallback tier.
@@ -91,9 +99,13 @@ export default {
   // "0 6 * * *"  keep Supabase warm (free tier auto-pauses after ~7 idle days)
   // "0 7 * * 1"  weekly transit-alert emails (no-op unless RESEND_API_KEY,
   //              SUPABASE_SERVICE_ROLE_KEY and ALERT_FROM are configured)
+  // "30 13 * * *" daily push alerts at 19:00 IST for tomorrow's transits,
+  //              dasha starts and life-event pattern returns (./pushAlerts.js)
   async scheduled(event, env, ctx) {
     if (event.cron === '0 7 * * 1') {
       ctx.waitUntil(sendTransitAlerts(env));
+    } else if (event.cron === '30 13 * * *') {
+      ctx.waitUntil(runPushAlerts(env));
     } else {
       ctx.waitUntil(keepSupabaseWarm(env));
     }
@@ -180,7 +192,7 @@ async function route(request, env, ctx) {
   if (url.pathname === '/api/health') return handleHealth(env);
   // Per-IP throttle on the (potentially expensive) AI POST endpoints. Auth
   // login/signup/reset/OTP live on Supabase, which rate-limits them itself.
-  if (url.pathname === '/api/interpret' || url.pathname === '/api/chat' || url.pathname === '/api/push/register') {
+  if (url.pathname === '/api/interpret' || url.pathname === '/api/chat' || url.pathname === '/api/push/register' || url.pathname === '/api/push/preview' || url.pathname === '/api/docintel/layout' || url.pathname === '/api/search') {
     if (request.method === 'POST' && !(await checkIpRateLimit(env, request))) {
       return json({ error: 'Too many requests — please slow down and try again shortly.' }, 429);
     }
@@ -188,6 +200,9 @@ async function route(request, env, ctx) {
   if (url.pathname === '/api/interpret') return handleInterpret(request, env, ctx);
   if (url.pathname === '/api/chat') return handleChat(request, env, ctx);
   if (url.pathname === '/api/push/register') return handlePushRegister(request, env, json);
+  if (url.pathname === '/api/push/preview') return handlePushPreview(request, env, json);
+  if (url.pathname === '/api/docintel/layout') return handleDocIntelLayout(request, env, json);
+  if (url.pathname === '/api/search') return handleSearch(request, env, json);
   if (url.pathname.startsWith('/api/')) return json({ error: 'Unknown endpoint' }, 404);
   return env.ASSETS.fetch(request);
 }

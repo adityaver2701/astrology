@@ -48,7 +48,8 @@ export async function createSasToken(resourceUri, keyName, key, ttlSeconds = 360
   return `SharedAccessSignature sr=${sr}&sig=${sig}&se=${se}&skn=${encodeURIComponent(keyName)}`;
 }
 
-async function supabaseUserId(request, env) {
+/** Supabase user {id, email} for the request's bearer token, or null. */
+export async function supabaseUser(request, env) {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
@@ -56,7 +57,8 @@ async function supabaseUserId(request, env) {
     headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
   });
   if (!u.ok) return null;
-  return (await u.json().catch(() => null))?.id || null;
+  const info = await u.json().catch(() => null);
+  return info?.id ? { id: info.id, email: info.email || '' } : null;
 }
 
 /**
@@ -71,7 +73,7 @@ export async function handlePushRegister(request, env, json) {
   if (!nh || !env.NH_HUB_NAME) return json({ error: 'Push is not configured on this deployment.' }, 503);
 
   let userId;
-  try { userId = await supabaseUserId(request, env); } catch { userId = null; }
+  try { userId = (await supabaseUser(request, env))?.id || null; } catch { userId = null; }
   if (!userId) return json({ error: 'Please sign in to enable notifications.' }, 401);
 
   let body;

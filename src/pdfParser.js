@@ -475,8 +475,12 @@ function parseVarshaphal(allText) {
 //  STEP 3: MAIN PARSER — COMBINE ALL SECTIONS
 // ──────────────────────────────────────────────────────────
 
-export async function parseKundliPDF(file) {
-  const pages = await extractTextFromPDF(file);
+/**
+ * Run every section parser over per-page text (from pdf.js or Document
+ * Intelligence) and score how much was found.
+ * @param {string[]} pages
+ */
+export function parsePages(pages) {
   const allText = pages.join('\n\n---PAGE---\n\n');
 
   const result = {
@@ -524,6 +528,78 @@ export async function parseKundliPDF(file) {
   const vals = Object.values(result.confidence);
   result.confidence.overall = vals.reduce((a, b) => a + b, 0) / vals.length;
 
+  return result;
+}
+
+// ──────────────────────────────────────────────────────────
+//  CLOUD FALLBACK: Azure Document Intelligence (layout model)
+// ──────────────────────────────────────────────────────────
+// When pdf.js recovers too little (scanned/image PDFs, odd encodings), send
+// the file to the Worker's /api/docintel/layout and re-run the same parsers on
+// that text. Each section keeps whichever source scored higher. On the free
+// F0 tier only the first 2 pages are analysed, which still covers the birth
+// details and planetary positions in AstroSage reports.
+
+export const DOCINTEL_FALLBACK_BELOW = 0.5; // overall confidence threshold
+export const DOCINTEL_MAX_BYTES = 4 * 1024 * 1024;
+const SECTION_KEYS = ['planets', 'ashtakvarga', 'vimshottari', 'pratyantar', 'sadesati', 'kpCusps', 'shadbala', 'chalit'];
+
+/** Per section, keep the better of two parse results. Pure, unit-tested. */
+export function mergeParsed(primary, alt) {
+  const merged = { ...primary, confidence: { ...primary.confidence } };
+  const taken = [];
+  for (const k of SECTION_KEYS) {
+    if ((alt.confidence?.[k] || 0) > (primary.confidence?.[k] || 0)) {
+      merged[k] = alt[k];
+      merged.confidence[k] = alt.confidence[k];
+      taken.push(k);
+    }
+  }
+  // parseBasicDetails returns an object of nulls when it finds nothing, so
+  // compare how many fields each source actually filled.
+  const filled = (o) => (o ? Object.values(o).filter((v) => v !== null && v !== undefined && v !== '').length : 0);
+  if (filled(alt.birthDetails) > filled(primary.birthDetails)) { merged.birthDetails = alt.birthDetails; taken.push('birthDetails'); }
+  if (!primary.varshaphal && alt.varshaphal) { merged.varshaphal = alt.varshaphal; taken.push('varshaphal'); }
+  const vals = SECTION_KEYS.map((k) => merged.confidence[k] || 0);
+  merged.confidence.overall = vals.reduce((a, b) => a + b, 0) / vals.length;
+  merged.docIntel = { used: true, sections: taken };
+  return merged;
+}
+
+async function fetchDocIntelPages(file) {
+  const [{ apiUrl }, { getSession }] = await Promise.all([import('./apiBase.js'), import('./cloudSync.js')]);
+  const session = await getSession();
+  if (!session?.access_token) return null; // fallback needs a signed-in user
+  const res = await fetch(apiUrl('/api/docintel/layout'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf', Authorization: `Bearer ${session.access_token}` },
+    body: file,
+  });
+  if (!res.ok) { console.warn('docintel fallback failed', res.status); return null; }
+  return res.json();
+}
+
+/**
+ * Parse an AstroSage PDF. Uses pdf.js first; if that finds too little and the
+ * file is small enough, falls back to Azure Document Intelligence.
+ * @param {File} file
+ * @param {{cloudFallback?: boolean}} [opts]
+ */
+export async function parseKundliPDF(file, opts = {}) {
+  const pages = await extractTextFromPDF(file);
+  let result = parsePages(pages);
+  const wantFallback = opts.cloudFallback !== false
+    && result.confidence.overall < DOCINTEL_FALLBACK_BELOW
+    && file.size <= DOCINTEL_MAX_BYTES;
+  if (wantFallback) {
+    try {
+      const di = await fetchDocIntelPages(file);
+      if (di?.pages?.length) result = mergeParsed(result, parsePages(di.pages));
+    } catch (e) {
+      console.warn('docintel fallback error', e);
+    }
+  }
+  result.pageCount = pages.length;
   return result;
 }
 
