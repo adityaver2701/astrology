@@ -43,6 +43,16 @@ export const DEFAULT_BIRTH = {
 export const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || 'penetacle@gmail.com')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 
+// Traditional glyphs, used as small coloured badges next to planet names.
+export const PLANET_GLYPHS = {
+  sun: '☉', moon: '☽', mercury: '☿', venus: '♀', mars: '♂',
+  jupiter: '♃', saturn: '♄', rahu: '☊', ketu: '☋',
+};
+
+// Zodiac glyphs in sign-index order (0 = Aries). The U+FE0E selector asks for
+// the text (not emoji) presentation so they inherit colour and font size.
+export const SIGN_GLYPHS = ['♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓'].map(g => g + '\uFE0E');
+
 // Planet long name helper
 export const PLANET_NAMES = {
   sun: 'Sun (Surya)',
@@ -66,15 +76,26 @@ export const PLANET_NAMES = {
 // rest live behind the "More" sheet. Exactly four must be primary: with the
 // More button that fills a five-slot bar, which is the most Android can show
 // without the targets dropping under the 48dp minimum.
+//
+// `group` places the tab under one of NAV_GROUPS in the desktop side nav.
 export const TABS = [
-  { id: 'birth-chart',         icon: '☉', short: 'Chart',    primary: true,  label: 'Birth Details & Trik Bhava',    desc: 'Natal planet positions, dignities, nakshatras and karmic 6-8-12 house analysis.' },
-  { id: 'interactive-chart',   icon: '◈', short: 'Kundali',  primary: true,  label: 'Interactive Kundali',            desc: 'North-Indian chart with live transit overlay — drag planets or scrub the timeline.' },
-  { id: 'historical-transits', icon: '↺', short: 'History',  primary: false, label: 'Historical Transits (50 Yr)',    desc: 'Scan five decades of a planet’s sign ingresses through your houses.' },
-  { id: 'predictions',         icon: '✦', short: 'Events',   primary: true,  label: 'Life Events Matcher',            desc: 'Match logged life events to transit signatures and project future reoccurrences.' },
-  { id: 'alignment-transits',  icon: '✧', short: 'Degrees',  primary: false, label: 'Degree & Nakshatra Transits',    desc: 'Exact-degree and nakshatra alignment windows over your natal points.' },
-  { id: 'dasha-system',        icon: '☽', short: 'Dasha',    primary: true,  label: 'Vimshottari Dasha',              desc: 'Full Mahadasha → Antardasha → Pratyantar timeline from your Moon nakshatra.' },
-  { id: 'panchanga',           icon: '🗓', short: 'Panchanga', primary: false, label: 'Panchanga',                     desc: 'Tithi, vara, nakshatra, yoga and karana for any date — the five limbs of the Vedic day.' },
-  { id: 'compatibility',       icon: '♡', short: 'Match',    primary: false, label: 'Compatibility',                  desc: 'Ashtakoota (36-guna) matching between any two saved profiles.' },
+  { id: 'birth-chart',         icon: '☉', group: 'natal',  short: 'Chart',    primary: true,  label: 'Birth Details & Trik Bhava',    desc: 'Natal planet positions, dignities, nakshatras and karmic 6-8-12 house analysis.' },
+  { id: 'interactive-chart',   icon: '◈', group: 'natal',  short: 'Kundali',  primary: true,  label: 'Interactive Kundali',            desc: 'North-Indian chart with live transit overlay — drag planets or scrub the timeline.' },
+  { id: 'historical-transits', icon: '↺', group: 'timing', short: 'History',  primary: false, label: 'Historical Transits (50 Yr)',    desc: 'Scan five decades of a planet’s sign ingresses through your houses.' },
+  { id: 'predictions',         icon: '✦', group: 'timing', short: 'Events',   primary: true,  label: 'Life Events Matcher',            desc: 'Match logged life events to transit signatures and project future reoccurrences.' },
+  { id: 'alignment-transits',  icon: '✧', group: 'timing', short: 'Degrees',  primary: false, label: 'Degree & Nakshatra Transits',    desc: 'Exact-degree and nakshatra alignment windows over your natal points.' },
+  { id: 'dasha-system',        icon: '☽', group: 'natal',  short: 'Dasha',    primary: true,  label: 'Vimshottari Dasha',              desc: 'Full Mahadasha → Antardasha → Pratyantar timeline from your Moon nakshatra.' },
+  { id: 'panchanga',           icon: '🗓', group: 'daily',  short: 'Panchanga', primary: false, label: 'Panchanga',                     desc: 'Tithi, vara, nakshatra, yoga and karana for any date — the five limbs of the Vedic day.' },
+  { id: 'compatibility',       icon: '♡', group: 'daily',  short: 'Match',    primary: false, label: 'Compatibility',                  desc: 'Ashtakoota (36-guna) matching between any two saved profiles.' },
+];
+
+// Sections of the desktop side navigation. Tabs keep their TABS order (and so
+// their 1–8 keyboard shortcuts) inside each group; the groups only decide the
+// headings they appear under.
+export const NAV_GROUPS = [
+  { id: 'natal',  label: 'Your Chart' },
+  { id: 'timing', label: 'Transits & Timing' },
+  { id: 'daily',  label: 'Daily & Matching' },
 ];
 
 /** The four tabs pinned to the mobile bottom bar. */

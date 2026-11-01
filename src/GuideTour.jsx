@@ -1,9 +1,9 @@
 import { useState } from 'react';
 
 // ── First-run guided walkthrough ──────────────────────────────────────────
-// A step carousel that introduces the layout: the Birth & Location Profile,
-// each analysis tab (built from the same TABS metadata the nav uses), profiles,
-// and the AI reading. Shown automatically the first time a user signs in, and
+// A step carousel that introduces the layout: the chart card and its birth
+// details panel, each analysis section (built from the same TABS metadata the
+// nav uses), profiles, and the AI reading. Shown automatically the first time a user signs in, and
 // re-openable any time from the header "?" button.
 function buildSteps(tabs, isAdmin) {
   const steps = [];
@@ -18,23 +18,25 @@ function buildSteps(tabs, isAdmin) {
         planetary periods.</p>
         <p>This quick tour explains every part of the screen. Use <strong>Next</strong> /
         <strong> Back</strong>, or <strong>Skip</strong> anytime — you can reopen it from
-        the <strong>?</strong> button in the header.</p>
+        the <strong>⋯</strong> menu in the top bar.</p>
       </>
     ),
   });
 
   steps.push({
     icon: '📍',
-    title: '1. Fill your Birth & Location Profile',
+    title: '1. Enter your birth details',
     body: (
       <>
-        <p>Everything starts from the panel on the <strong>left</strong>. Click its
-        header to expand it, then enter the <strong>name, date and exact time of
-        birth</strong>.</p>
+        <p>Everything starts from the <strong>chart card</strong> at the top of the page.
+        Press <strong>Edit birth details</strong> (or <strong>Enter my birth details</strong>)
+        to open the panel, then fill in the <strong>name, date and exact time of birth</strong>.</p>
         <p>For the place, type a city in the <strong>search box</strong> and pick a match —
         it auto-fills latitude, longitude and timezone. Accurate time and place are what
         make the ascendant and houses correct.</p>
-        <p>The panel collapses to a thin strip once you’re done, to give the charts room.</p>
+        <p>The chart updates live while you type. The card also shows <strong>Today’s
+        sky</strong>: the tithi, where the Moon is moving through your houses, Sade Sati
+        and how far into your current dasha you are.</p>
       </>
     ),
   });
@@ -42,7 +44,7 @@ function buildSteps(tabs, isAdmin) {
   tabs.forEach((t, idx) => {
     steps.push({
       icon: t.icon,
-      title: `${idx + 1 < 10 ? '' : ''}Menu: ${t.label}`,
+      title: `Section: ${t.label}`,
       body: (
         <>
           <p>{t.desc}</p>
@@ -57,13 +59,13 @@ function buildSteps(tabs, isAdmin) {
     title: 'Profiles — save & switch charts',
     body: (
       <>
-        <p>Reading more than one person’s chart? Use <strong>+ Save Current</strong> in the
-        profile bar to store the chart on screen, then click any saved chip to switch
-        instantly.</p>
-        <p>The header <strong>⊙ Profiles</strong> button opens the manager to rename, edit,
+        <p>Reading more than one person’s chart? Press <strong>Save as profile</strong> in the
+        birth details panel, then switch between saved charts from the <strong>profile
+        menu</strong> next to the logo in the top bar.</p>
+        <p>The same menu opens <strong>Manage profiles &amp; PDFs</strong> to rename, edit,
         delete, or attach an <strong>AstroSage PDF</strong> (which unlocks Ashtakvarga,
-        Pratyantar timing and more). <strong>Sync ↑</strong> updates a saved profile with
-        your latest edits.</p>
+        Pratyantar timing and more). <strong>Update</strong> in the birth details panel
+        copies your latest edits into the active profile.</p>
       </>
     ),
   });
@@ -90,8 +92,8 @@ function buildSteps(tabs, isAdmin) {
         <p>Your profiles, charts and uploaded reports are tied to your account and visible
         only to you. They sync to the cloud automatically, so they’re there on any device
         when you sign in.</p>
-        {isAdmin && <p>As an admin, you also have the <strong>☁ Sync</strong> settings in the
-        header for advanced configuration.</p>}
+        {isAdmin && <p>As an admin, the <strong>⋯</strong> menu in the top bar also has the
+        users dashboard, Ask AI and the cloud sync settings.</p>}
       </>
     ),
   });
@@ -101,9 +103,10 @@ function buildSteps(tabs, isAdmin) {
     title: 'You’re all set!',
     body: (
       <>
-        <p>Start by opening the <strong>Birth &amp; Location Profile</strong> on the left and
-        entering your details. The chart and every tab update automatically.</p>
-        <p>Need this again? Click the <strong>?</strong> in the header anytime.</p>
+        <p>Press <strong>Get started</strong> to open the birth details panel and enter your
+        details. The chart and every section update automatically.</p>
+        <p>Need this again? It’s in the <strong>⋯</strong> menu (or the <strong>?</strong>
+        button on larger screens) any time.</p>
       </>
     ),
   });

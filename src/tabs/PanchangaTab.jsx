@@ -118,16 +118,16 @@ export default function PanchangaTab({ birthDetails }) {
                 </thead>
                 <tbody>
                   <tr>
-                    <td><strong>Sun (Surya)</strong></td>
-                    <td>{panchanga.sun.signName}</td>
-                    <td>{formatDegrees(panchanga.sun.longitude % 30)}</td>
-                    <td>{panchanga.sun.nakshatraName}</td>
+                    <td data-label="Body"><span className="planet-glyph pg-sun" aria-hidden="true">☉</span><strong>Sun (Surya)</strong></td>
+                    <td data-label="Sign">{panchanga.sun.signName}</td>
+                    <td data-label="Longitude">{formatDegrees(panchanga.sun.longitude % 30)}</td>
+                    <td data-label="Nakshatra">{panchanga.sun.nakshatraName}</td>
                   </tr>
                   <tr>
-                    <td><strong>Moon (Chandra)</strong></td>
-                    <td>{panchanga.moon.signName}</td>
-                    <td>{formatDegrees(panchanga.moon.longitude % 30)}</td>
-                    <td>{panchanga.moon.nakshatraName} · Pada {panchanga.moon.pada}</td>
+                    <td data-label="Body"><span className="planet-glyph pg-moon" aria-hidden="true">☽</span><strong>Moon (Chandra)</strong></td>
+                    <td data-label="Sign">{panchanga.moon.signName}</td>
+                    <td data-label="Longitude">{formatDegrees(panchanga.moon.longitude % 30)}</td>
+                    <td data-label="Nakshatra">{panchanga.moon.nakshatraName} · Pada {panchanga.moon.pada}</td>
                   </tr>
                 </tbody>
               </table>

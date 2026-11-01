@@ -96,7 +96,7 @@ export default function PredictionsTab({
                         <div className="acc-unlock-text">
                           <strong>Upload an AstroSage PDF to this profile</strong> to unlock Ashtakvarga bindu scoring,
                           Pratyantar-level timing (±2 week precision), KP sub-lord event triggers, Shadbala-weighted dashas and Sadesati overlays.
-                          <br /><em style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Open ⊙ Profiles → select this profile → drop PDF in the upload zone</em>
+                          <br /><em style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Profile menu (top bar) → Manage profiles &amp; PDFs → drop the PDF on this profile</em>
                         </div>
                       </div>
                     )}

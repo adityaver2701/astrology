@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { signUp, signIn, resendConfirmation } from './cloudSync';
+import ZodiacWheel from './components/ZodiacWheel';
 
 // Eye / eye-off icon for the password show/hide toggle (module-level so it is
 // not re-created on every render).
@@ -91,11 +92,38 @@ export default function AuthScreen({ onAuthed }) {
 
   return (
     <div className="auth-screen">
+      <div className="auth-layout">
+      {/* Brand panel: what the app does, before asking anyone for a password. */}
+      <section className="auth-hero">
+        <ZodiacWheel size={260} spin className="auth-wheel" />
+        <h1 className="auth-hero-title">Astro-Transit</h1>
+        <p className="auth-hero-tag">
+          Your Vedic birth chart, the sky above you today, and the timing in between.
+        </p>
+        <ul className="auth-features">
+          <li>
+            <span className="auth-feature-icon" aria-hidden="true">☉</span>
+            <span><strong>Sidereal birth chart</strong>Lahiri positions, North-Indian Kundali and divisional charts.</span>
+          </li>
+          <li>
+            <span className="auth-feature-icon" aria-hidden="true">☽</span>
+            <span><strong>Dasha &amp; live transits</strong>Vimshottari timeline, Sade Sati and today’s Moon through your houses.</span>
+          </li>
+          <li>
+            <span className="auth-feature-icon" aria-hidden="true">✦</span>
+            <span><strong>Life-event matching</strong>Find the transit signature of past events — and when it returns.</span>
+          </li>
+        </ul>
+      </section>
+
       <div className="auth-card">
         <div className="auth-brand">
-          <span className="auth-glyph">☉</span>
-          <h1 className="auth-title">Astro-Transit Chart</h1>
-          <p className="auth-tagline">Vedic Jyotish & Karmic Trik Bhava Analytics</p>
+          <h2 className="auth-title">{mode === 'register' ? 'Create your account' : 'Welcome back'}</h2>
+          <p className="auth-tagline">
+            {mode === 'register'
+              ? 'Free, private, and synced across your devices.'
+              : 'Sign in to open your saved charts.'}
+          </p>
         </div>
 
         <div className="auth-tabs">
@@ -183,6 +211,7 @@ export default function AuthScreen({ onAuthed }) {
         <p className="auth-note">
           Your profiles, reports and charts are private to your account and stored securely in the cloud.
         </p>
+      </div>
       </div>
     </div>
   );

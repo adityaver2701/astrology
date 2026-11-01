@@ -30,9 +30,9 @@ export default function CompatibilityTab({ savedProfiles }) {
           <span className="empty-state-icon">♡</span>
           <h3>Two Profiles Needed</h3>
           <p>
-            Save at least two profiles (yours and a partner&apos;s / family member&apos;s) using the
-            <strong> ⊙ Profiles</strong> manager, then compare their charts here using the
-            classical 36-point ashtakoota system.
+            Save at least two profiles (yours and a partner&apos;s / family member&apos;s) with
+            <strong> Save as profile</strong> in the birth details panel (or the profile menu in the
+            top bar), then compare their charts here using the classical 36-point ashtakoota system.
           </p>
         </div>
       </div>
@@ -112,16 +112,16 @@ export default function CompatibilityTab({ savedProfiles }) {
           <div className="table-responsive spacing-top">
             <table className="planetary-table">
               <thead>
-                <tr><th>Koota</th><th>Assesses</th><th>Combination</th><th>Score</th><th></th></tr>
+                <tr><th>Koota</th><th>Assesses</th><th>Combination</th><th>Score</th><th>Strength</th></tr>
               </thead>
               <tbody>
                 {result.match.kootas.map(k => (
                   <tr key={k.name}>
-                    <td><strong>{k.name}</strong></td>
-                    <td>{k.meaning}</td>
-                    <td style={{ textTransform: 'capitalize' }}>{k.detail}</td>
-                    <td style={{ fontWeight: 700, color: pctColor(k.score, k.max) }}>{k.score} / {k.max}</td>
-                    <td style={{ minWidth: '90px' }}>
+                    <td data-label="Koota"><strong>{k.name}</strong></td>
+                    <td data-label="Assesses">{k.meaning}</td>
+                    <td data-label="Combination" style={{ textTransform: 'capitalize' }}>{k.detail}</td>
+                    <td data-label="Score" style={{ fontWeight: 700, color: pctColor(k.score, k.max) }}>{k.score} / {k.max}</td>
+                    <td data-label="Strength" style={{ minWidth: '90px' }}>
                       <div style={{ height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${(k.score / k.max) * 100}%`, background: pctColor(k.score, k.max) }} />
                       </div>

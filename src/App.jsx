@@ -26,9 +26,15 @@ import KundaliChart from './components/KundaliChart';
 import SyncSettingsModal from './components/SyncSettingsModal';
 import ProfileManagerModal from './components/ProfileManagerModal';
 import MobileNav from './components/MobileNav';
+import TopBar from './components/TopBar';
+import SideNav from './components/SideNav';
+import ChartHero from './components/ChartHero';
+import BirthDetailsDrawer from './components/BirthDetailsDrawer';
+import Toaster from './components/Toaster';
+import ZodiacWheel from './components/ZodiacWheel';
 import { VARGAS, buildVargaChart } from './vargas';
 import {
-  PROFILE_COLORS, DEFAULT_BIRTH, ADMIN_EMAILS, PLANET_NAMES, TABS,
+  PROFILE_COLORS, DEFAULT_BIRTH, ADMIN_EMAILS, PLANET_NAMES, TABS, NAV_GROUPS,
 } from './constants';
 import { parseCSV, classifyCategory, parseEventDates } from './utils/csv';
 import { offsetForLocalTime, isValidTimeZone } from './utils/timezone';
@@ -49,14 +55,32 @@ const CompatibilityTab = lazy(() => import('./tabs/CompatibilityTab'));
 function App() {
   const [activeTab, setActiveTab] = useState('birth-chart');
 
-  // Theme (light = Celestial Gold, dark = Midnight Sky)
-  const [theme, setTheme] = useState(() => localStorage.getItem('astro_theme') || 'light');
+  // Theme (light = Celestial Gold, dark = Midnight Sky). First visit follows
+  // the OS setting; after that the user's explicit choice is remembered.
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('astro_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('astro_theme', theme);
+    // Browser chrome (Android address bar, PWA title bar) follows the theme.
+    document.querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#0a0d1f' : '#fbf6ec');
   }, [theme]);
 
-  // Keyboard shortcuts: 1-6 switch tabs (ignored while typing)
+  // ── Toasts ── short confirmations, rendered by components/Toaster.jsx
+  const [toasts, setToasts] = useState([]);
+  const toastSeq = useRef(0);
+  const dismissToast = useCallback((id) => setToasts(list => list.filter(t => t.id !== id)), []);
+  const notify = useCallback((text, tone = 'ok') => {
+    const id = ++toastSeq.current;
+    setToasts(list => [...list.slice(-2), { id, text, tone }]);
+    setTimeout(() => dismissToast(id), 3200);
+  }, [dismissToast]);
+
+  // Keyboard shortcuts: 1-8 switch sections (ignored while typing)
   useEffect(() => {
     const onKey = (e) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -148,8 +172,8 @@ function App() {
   const [dashaData, setDashaData] = useState(null);
   const [expandedDasha, setExpandedDasha] = useState(null);
 
-  // Birth & Location Profile collapse state
-  const [birthFormCollapsed, setBirthFormCollapsed] = useState(true);
+  // Birth details slide-over (components/BirthDetailsDrawer.jsx)
+  const [showBirthEditor, setShowBirthEditor] = useState(false);
 
   // Predictions tab collapse states (default collapsed so report is front-and-centre)
   const [eventsListOpen, setEventsListOpen] = useState(false);
@@ -220,7 +244,8 @@ function App() {
   // session: undefined = still checking · null = signed out · object = signed in
   const authConfigured = isSupabaseConfigured();
   const [session, setSession] = useState(() => (authConfigured ? undefined : null));
-  const [showUserMenu, setShowUserMenu] = useState(false);
+  // Which top-bar menu is open: 'profiles' | 'more' | 'user' | null
+  const [openMenu, setOpenMenu] = useState(null);
   const user = session?.user || null;
   const isAdmin = !!user && ADMIN_EMAILS.includes((user.email || '').toLowerCase());
 
@@ -259,7 +284,7 @@ function App() {
   }, []);
 
   const handleSignOut = useCallback(async () => {
-    setShowUserMenu(false);
+    setOpenMenu(null);
     cloudReadyRef.current = false;
     lastPushedJsonRef.current = null;
     try { await signOut(); } catch (e) { console.error('sign out', e); }
@@ -284,7 +309,7 @@ function App() {
       try { await signOut(); } catch (e) { console.error('sign out', e); }
       resetLocalData();
       setSyncStatus('off');
-      setShowUserMenu(false);
+      setOpenMenu(null);
       alert('Your data has been deleted.');
     } catch (e) {
       alert(`Could not delete your data: ${e.message || 'unknown error'}`);
@@ -334,7 +359,7 @@ function App() {
   const finishGuide = useCallback(() => {
     markGuideSeen();
     setShowGuide(false);
-    setBirthFormCollapsed(false); // open the Birth & Location Profile so they can start
+    setShowBirthEditor(true); // open the birth details panel so they can start
   }, [markGuideSeen]);
 
   // Fixed-key-order serialization for change detection (jsonb reorders keys)
@@ -543,12 +568,13 @@ function App() {
     const onBack = (e) => {
       const close = (fn) => { e.preventDefault(); fn(); };
       if (showMoreSheet) return close(() => setShowMoreSheet(false));
+      if (openMenu) return close(() => setOpenMenu(null));
       if (showClaudeChat) return close(() => setShowClaudeChat(false));
       if (showAdmin) return close(() => setShowAdmin(false));
       if (showGuide) return close(() => setShowGuide(false));
       if (showSyncSettings) return close(() => setShowSyncSettings(false));
       if (showProfileManager) return close(() => setShowProfileManager(false));
-      if (showUserMenu) return close(() => setShowUserMenu(false));
+      if (showBirthEditor) return close(() => setShowBirthEditor(false));
       // No overlay open: fall back to the first tab before letting the app exit.
       if (activeTab !== TABS[0].id) return close(() => setActiveTab(TABS[0].id));
       // Nothing handled → native layer exits the app.
@@ -556,7 +582,7 @@ function App() {
     window.addEventListener('astro:backbutton', onBack);
     return () => window.removeEventListener('astro:backbutton', onBack);
   }, [showMoreSheet, showClaudeChat, showAdmin, showGuide, showSyncSettings,
-      showProfileManager, showUserMenu, activeTab]);
+      showProfileManager, showBirthEditor, openMenu, activeTab]);
 
   // Advanced: override the Supabase URL/key (most users never need this — the
   // app ships pre-configured). Saving reloads so the auth client re-inits.
@@ -927,6 +953,7 @@ function App() {
       setActiveProfileId(existing.id);
       localStorage.setItem('astro_active_profile_id', String(existing.id));
       setPrepareFlash('updated');
+      notify(`Profile “${name}” updated`);
     } else {
       const newProfile = {
         id: Date.now(),
@@ -941,10 +968,11 @@ function App() {
       setActiveProfileId(newProfile.id);
       localStorage.setItem('astro_active_profile_id', String(newProfile.id));
       setPrepareFlash('saved');
+      notify(`Saved “${name}” as a profile`);
     }
     // The savedProfiles change triggers the debounced cloud auto-save effect.
     setTimeout(() => setPrepareFlash(''), 4000);
-  }, [handleGenerateNatal, birthDetails, lifeEvents, savedProfiles]);
+  }, [handleGenerateNatal, birthDetails, lifeEvents, savedProfiles, notify]);
 
   // (Removed) CSV auto-load: life events are now per-user only; the previous
   // auto-import seeded every session with the project owner's timeline.
@@ -1247,17 +1275,15 @@ function App() {
     }
   }, []);
 
-  const [shareFlash, setShareFlash] = useState(false);
   const handleShareChart = useCallback(async () => {
     const url = buildShareUrl(birthDetails);
     try {
       await navigator.clipboard.writeText(url);
-      setShareFlash(true);
-      setTimeout(() => setShareFlash(false), 2500);
+      notify('Share link copied — anyone with it can view this chart (read-only).');
     } catch {
       window.prompt('Copy this share link:', url);
     }
-  }, [birthDetails]);
+  }, [birthDetails, notify]);
 
   const handleScanHistoricalTransits = () => {
     setScanningTransits(true);
@@ -1470,16 +1496,64 @@ function App() {
     return () => clearTimeout(timer);
   }, [activeTab, natalChart, lifeEvents, birthDetails, autoScanKey, autoMatchesKey]);
 
+  // ── App-shell helpers (top bar, side nav, chart card, drawer) ───────────
+  const displayPanelRef = useRef(null);
+  // Switching sections from the sticky side nav while scrolled deep into a
+  // long tab would land you mid-way down the new one — bring its top into view.
+  const selectTab = useCallback((id) => {
+    setActiveTab(id);
+    const el = displayPanelRef.current;
+    if (el && el.getBoundingClientRect().top < 0) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
+
+  const activeProfile = useMemo(
+    () => savedProfiles.find(p => p.id === activeProfileId) || null,
+    [savedProfiles, activeProfileId]
+  );
+  // The untouched default (1 Jan 2000, New Delhi) is a placeholder, not
+  // anyone's chart — say so instead of presenting it as "your" analysis.
+  const isSampleChart = !activeProfile && !sharedChartActive
+    && !(birthDetails.name || '').trim()
+    && birthDetails.date === DEFAULT_BIRTH.date
+    && birthDetails.time === DEFAULT_BIRTH.time
+    && birthDetails.placeName === DEFAULT_BIRTH.placeName;
+
+  const closeBirthEditor = useCallback(() => {
+    setShowBirthEditor(false);
+    setPrepareFlash(f => (f === 'name-required' ? '' : f));
+  }, []);
+
+  const openProfileManager = useCallback(() => {
+    setProfileForm({ name: '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' });
+    setEditingProfileId(null);
+    setShowProfileManager(true);
+  }, [savedProfiles.length]);
+
+  const openSaveCurrentProfile = useCallback(() => {
+    setProfileForm({ name: birthDetails.name || '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' });
+    setEditingProfileId(null);
+    setShowProfileManager(true);
+  }, [birthDetails.name, savedProfiles.length]);
+
+  const handleResetDevice = useCallback(() => {
+    if (window.confirm('Clear all data saved on this device (birth details, life events, profiles, predictions)?' +
+      (user ? '\n\nYour cloud copy is not affected — it reloads the next time you sign in.' : ''))) {
+      ['astro_birth_details', 'astro_life_events', 'astro_saved_profiles', 'astro_saved_predictions', 'astro_csv_autoloaded']
+        .forEach(k => localStorage.removeItem(k));
+      window.location.reload();
+    }
+  }, [user]);
+
   // ── Auth gate ───────────────────────────────────────────────────────────
   // While the session is resolving, show a minimal splash. If configured and
   // not signed in, show the register/login screen instead of the app.
   if (authConfigured && session === undefined) {
     return (
-      <div className="auth-screen">
-        <div className="auth-card" style={{ textAlign: 'center' }}>
-          <span className="auth-glyph">☉</span>
-          <p style={{ color: 'var(--text-muted)', marginTop: 12 }}>Loading…</p>
-        </div>
+      <div className="auth-screen auth-splash" role="status">
+        <ZodiacWheel size={120} spin title="Loading" />
+        <p className="auth-splash-text">Aligning the stars…</p>
       </div>
     );
   }
@@ -1553,487 +1627,178 @@ function App() {
           </div>
         );
       })()}
-      {/* Header Banner */}
-      <header className="app-header">
-        <div className="header-inner">
-          <div>
-            <h1 className="header-title">Astro-Transit Chart</h1>
-            <p className="header-subtitle">Vedic Jyotish & Karmic Trik Bhava Analytics Engine</p>
-          </div>
-          <div className="header-actions">
-            <button
-              className="header-help-btn"
-              onClick={() => setShowGuide(true)}
-              title="Open the guided tour"
-              aria-label="Help and guided tour"
-            >?</button>
-            {isAdmin && (
-              <button
-                className="theme-toggle"
-                onClick={() => setShowAdmin(true)}
-                title="Admin dashboard — users & profiles"
-              >🛡 Admin</button>
-            )}
-            {isAdmin && (
-              <button
-                className="theme-toggle"
-                onClick={() => setShowClaudeChat(true)}
-                title="Ask AI about your saved profiles"
-              >✦ Ask AI</button>
-            )}
-            <button
-              className="theme-toggle"
-              onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
-              title={theme === 'dark' ? 'Switch to Celestial Gold (light) theme' : 'Switch to Midnight Sky (dark) theme'}
-            >
-              <span className="tt-icon">{theme === 'dark' ? '☀' : '☾'}</span>
-              {theme === 'dark' ? 'Day' : 'Night'}
-            </button>
-{isAdmin && (
-            <button
-              className="theme-toggle"
-              onClick={() => setShowSyncSettings(true)}
-              title={
-                syncStatus === 'off' ? 'Cloud sync is off — click to set up automatic profile backup'
-                : syncStatus === 'error' ? `Sync error: ${syncError} — click to fix`
-                : syncStatus === 'saving' ? 'Saving changes to cloud…'
-                : syncStatus === 'loading' ? 'Loading profiles from cloud…'
-                : 'All data synced to cloud'
-              }
-            >
-              <span className={`sync-dot sync-${syncStatus}`} />
-              ☁ {syncStatus === 'off' ? 'Sync' : syncStatus === 'error' ? 'Error' : syncStatus === 'synced' ? 'Synced' : '…'}
-            </button>
-            )}
-            <button
-              className="theme-toggle"
-              onClick={handleShareChart}
-              title="Copy a read-only link to the current birth chart"
-            >⤴ {shareFlash ? 'Link copied!' : 'Share'}</button>
-            <button className="header-profile-btn" onClick={() => { setProfileForm({ name: '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' }); setEditingProfileId(null); setShowProfileManager(true); }}>
-              ⊙ Profiles {savedProfiles.length > 0 && <span className="header-profile-count">{savedProfiles.length}</span>}
-            </button>
-            {user && (
-              <div className="user-menu">
-                <button className="user-chip" onClick={() => setShowUserMenu(v => !v)} title={user.email}>
-                  <span className="user-avatar">{(user.email || '?').charAt(0).toUpperCase()}</span>
-                  <span className="user-email-short">{user.email}</span>
-                  <span aria-hidden>▾</span>
-                </button>
-                {showUserMenu && (
-                  <>
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 55 }} onClick={() => setShowUserMenu(false)} />
-                    <div className="user-pop">
-                      <div className="user-pop-email">Signed in as<br /><strong>{user.email}</strong></div>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', cursor: 'pointer', borderTop: '1px solid rgba(139,92,246,0.15)' }}
-                        title="Get a weekly email when a significant transit window is approaching (requires server email setup)">
-                        <input type="checkbox" checked={alertsEnabled} onChange={e => setAlertsEnabled(e.target.checked)} />
-                        Email transit alerts <span style={{ opacity: 0.6 }}>(beta)</span>
-                      </label>
-                      <button className="user-pop-signout" onClick={handleSignOut}>Sign Out</button>
-                      <button
-                        className="user-pop-signout"
-                        style={{ color: '#dc2626', borderTop: '1px solid rgba(220,38,38,0.2)' }}
-                        onClick={handleDeleteAccountData}
-                        disabled={deletingAccount}
-                        title="Permanently erase all your data from this app"
-                      >
-                        {deletingAccount ? 'Deleting…' : 'Delete my data'}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* Profile Switcher Bar */}
-      <div className="profile-bar">
-        <div className="profile-bar-inner">
-          {savedProfiles.length === 0 ? (
-            <span className="profile-bar-hint">No profiles yet — save one to switch between charts instantly</span>
-          ) : (
-            <div className="profile-bar-scroll">
-              {savedProfiles.map(prof => {
-                const isActive = activeProfileId === prof.id;
-                return (
-                  <button
-                    key={prof.id}
-                    className={`profile-card-btn${isActive ? ' active' : ''}`}
-                    onClick={() => handleLoadProfile(prof)}
-                    title={`Load ${prof.profileName}`}
-                  >
-                    <span className="pcb-avatar" style={{ background: prof.color || '#ca8a04' }}>
-                      {(prof.profileName || 'U').charAt(0).toUpperCase()}
-                    </span>
-                    <span className="pcb-info">
-                      <span className="pcb-name">{prof.profileName}</span>
-                      <span className="pcb-meta">{prof.birthDetails?.date?.split('-')[0] || '—'}{prof.lifeEvents?.length ? ` · ${prof.lifeEvents.length}ev` : ''}</span>
-                    </span>
-                    {isActive && <span className="pcb-active-pip" />}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="profile-bar-actions">
-            <button
-              className="pba-btn"
-              onClick={() => {
-                setProfileForm({ name: birthDetails.name || '', color: PROFILE_COLORS[savedProfiles.length % PROFILE_COLORS.length], notes: '' });
-                setEditingProfileId(null);
-                setShowProfileManager(true);
-              }}
-            >+ Save Current</button>
-          </div>
-        </div>
-      </div>
+      {/* Sticky app bar: brand, profile switcher, actions, account */}
+      <TopBar
+        openMenu={openMenu} setOpenMenu={setOpenMenu}
+        theme={theme} onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+        onShare={handleShareChart}
+        onHelp={() => setShowGuide(true)}
+        onEditBirth={() => setShowBirthEditor(true)}
+        savedProfiles={savedProfiles} activeProfileId={activeProfileId} birthDetails={birthDetails}
+        onLoadProfile={(prof) => { handleLoadProfile(prof); notify(`Switched to ${prof.profileName}`, 'info'); }}
+        onSaveCurrent={openSaveCurrentProfile}
+        onManageProfiles={openProfileManager}
+        isAdmin={isAdmin}
+        onOpenAdmin={() => setShowAdmin(true)}
+        onOpenChat={() => setShowClaudeChat(true)}
+        onOpenSync={() => setShowSyncSettings(true)}
+        syncStatus={syncStatus} syncError={syncError}
+        user={user} alertsEnabled={alertsEnabled} setAlertsEnabled={setAlertsEnabled}
+        onSignOut={handleSignOut} onDeleteData={handleDeleteAccountData} deletingAccount={deletingAccount}
+        onResetDevice={handleResetDevice}
+      />
 
       {/* Shared-chart banner */}
       {sharedChartActive && (
-        <div style={{ maxWidth: '1400px', margin: '10px auto 0', padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(234,179,8,0.4)', background: 'rgba(234,179,8,0.08)', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
-          <span>👁</span>
-          <span style={{ flex: 1 }}>
+        <div className="shared-banner" role="status">
+          <span className="shared-banner-icon" aria-hidden="true">👁</span>
+          <span className="shared-banner-text">
             Viewing a <strong>shared chart</strong>{birthDetails.name ? <> — <strong>{birthDetails.name}</strong></> : null}.
-            Nothing is saved to your profiles unless you press “Prepare Chart &amp; Save Profile”.
+            Nothing is saved to your profiles unless you choose “Save as profile”.
           </span>
-          <button className="pm-close" onClick={() => setSharedChartActive(false)} aria-label="Dismiss">✕</button>
+          <button className="icon-btn" onClick={() => setSharedChartActive(false)} aria-label="Dismiss">✕</button>
         </div>
       )}
 
-      {/* Main Grid: Left Controls, Right Display */}
-      <main className="dashboard-layout" style={{ gridTemplateColumns: birthFormCollapsed ? '48px 1fr' : '380px 1fr', transition: 'grid-template-columns 0.3s ease' }}>
-        
-        {/* Left Side: Setup & Input Panel */}
-        <section className={`setup-panel glass-card${birthFormCollapsed ? ' panel-collapsed' : ''}`}>
-          {birthFormCollapsed ? (
-            <div className="panel-collapsed-bar" onClick={() => setBirthFormCollapsed(false)} title="Expand panel">
-              <span className="panel-collapsed-arrow">▶</span>
-              <span className="panel-collapsed-label">Birth &amp; Location Profile</span>
-            </div>
-          ) : (
-            <h2 className="section-title" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', userSelect:'none' }}
-              onClick={() => setBirthFormCollapsed(true)}>
-              Birth &amp; Location Profile
-              <span style={{ fontSize:'16px', fontWeight:'400', color:'var(--gold-dark)', marginLeft:'8px' }}>◀</span>
-            </h2>
-          )}
-          
-          {!birthFormCollapsed && (<>
-          {/* Online Place Geocoder Form */}
-          <form onSubmit={handleSearchLocation} className="search-form">
-            <div className="input-group">
-              <label htmlFor="searchQuery" className="input-label">Search Birth Place Online</label>
-              <div className="search-bar-row">
-                <input
-                  type="text"
-                  id="searchQuery"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="e.g. Mumbai, Maharashtra"
-                  className="text-input search-input"
-                />
-                <button type="submit" className="btn btn-primary" disabled={geocodingLoading}>
-                  {geocodingLoading ? 'Searching...' : 'Search'}
-                </button>
-              </div>
-            </div>
-          </form>
+      <div className="app-shell">
+        <SideNav activeTab={activeTab} setActiveTab={selectTab} />
 
-          {geocodingError && <p className="error-message">{geocodingError}</p>}
+        <main className="app-main" id="main">
+          <ChartHero
+            birthDetails={birthDetails} natalChart={natalChart} dashaData={dashaData}
+            activeProfile={activeProfile} isSample={isSampleChart}
+            onEditBirth={() => setShowBirthEditor(true)}
+            onSaveProfile={() => { setShowBirthEditor(true); handlePrepareAndSave(); }}
+            setActiveTab={selectTab}
+          />
 
-          {geocodingResults.length > 0 && (
-            <ul className="geocode-results" role="listbox" aria-label="Matching places">
-              {geocodingResults.map((place, i) => (
-                <li key={`${place.lat},${place.lon},${i}`}>
-                  <button
-                    type="button"
-                    className="geocode-result-btn"
-                    onClick={() => applyPlace(place)}
-                  >
-                    <span className="geocode-result-name">{place.name}</span>
-                    <span className="geocode-result-meta">
-                      {place.lat.toFixed(2)}°, {place.lon.toFixed(2)}°
-                      {place.tzId ? ` · ${place.tzId}` : ''}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="separator"></div>
-
-          {/* Core Birth Input Fields */}
-          <div className="birth-inputs-grid">
-            <div className="input-group">
-              <label htmlFor="birthName" className="input-label">Name</label>
-              <input
-                type="text"
-                id="birthName"
-                value={birthDetails.name}
-                onChange={(e) => setBirthDetails({ ...birthDetails, name: e.target.value })}
-                className="text-input"
-              />
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="birthDate" className="input-label">Birth Date (Local)</label>
-              <input
-                type="date"
-                id="birthDate"
-                value={birthDetails.date}
-                onChange={(e) => setBirthDetails({ ...birthDetails, date: e.target.value })}
-                className="text-input"
-              />
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="birthTime" className="input-label">Birth Time (Local)</label>
-              <input
-                type="time"
-                id="birthTime"
-                value={birthDetails.time}
-                onChange={(e) => setBirthDetails({ ...birthDetails, time: e.target.value })}
-                className="text-input"
-              />
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="birthTz" className="input-label">Timezone (GMT Offset)</label>
-              <input
-                type="number"
-                step="0.5"
-                id="birthTz"
-                value={birthDetails.timezone}
-                onChange={(e) => setBirthDetails({ ...birthDetails, timezone: parseFloat(e.target.value) })}
-                className="text-input"
-              />
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="birthLat" className="input-label">Latitude (°N)</label>
-              <input
-                type="number"
-                step="0.0001"
-                id="birthLat"
-                value={birthDetails.latitude}
-                onChange={(e) => setBirthDetails({ ...birthDetails, latitude: parseFloat(e.target.value) })}
-                className="text-input"
-              />
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="birthLon" className="input-label">Longitude (°E)</label>
-              <input
-                type="number"
-                step="0.0001"
-                id="birthLon"
-                value={birthDetails.longitude}
-                onChange={(e) => setBirthDetails({ ...birthDetails, longitude: parseFloat(e.target.value) })}
-                className="text-input"
-              />
-            </div>
-          </div>
-
-          <div className="place-display">
-            <strong>Current Coordinate Preset:</strong> {birthDetails.placeName} 
-            <br />
-            <small>({birthDetails.latitude.toFixed(4)}° N, {birthDetails.longitude.toFixed(4)}° E, GMT {birthDetails.timezone >= 0 ? '+' : ''}{birthDetails.timezone})</small>
-          </div>
-
-          <div className="separator"></div>
-          
-          {/* Active Profile Indicator */}
-          <div style={{ marginTop: '15px' }}>
+          {/* Tabbed display & output panel */}
+          <section className="display-panel glass-card" ref={displayPanelRef} aria-labelledby="page-head-title">
             {(() => {
-              const ap = savedProfiles.find(p => p.id === activeProfileId);
-              if (ap) {
-                return (
-                  <div className="active-profile-strip">
-                    <div className="aps-avatar" style={{ background: ap.color || '#ca8a04' }}>
-                      {ap.profileName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="aps-info">
-                      <div className="aps-name">{ap.profileName}</div>
-                      <div className="aps-sub">{ap.lifeEvents?.length || 0} life events · Active Profile</div>
-                    </div>
-                    <button className="btn btn-secondary aps-sync-btn" onClick={handleUpdateActiveProfileData} title="Sync current birth details & life events into saved profile">
-                      Sync ↑
-                    </button>
-                  </div>
-                );
-              }
+              const tab = TABS.find(t => t.id === activeTab);
+              const group = NAV_GROUPS.find(g => g.id === tab?.group);
               return (
-                <div className="aps-empty">
-                  No active profile — use the Profile Bar above to switch
+                <div className="page-head">
+                  <span className="page-head-icon" aria-hidden="true">{tab?.icon}</span>
+                  <div className="page-head-text">
+                    <div className="page-head-eyebrow">{group?.label}</div>
+                    <h2 className="page-head-title" id="page-head-title">{tab?.label}</h2>
+                    <p className="page-head-desc">{tab?.desc}</p>
+                  </div>
                 </div>
               );
             })()}
-          </div>
 
-          <button onClick={handlePrepareAndSave} className="btn btn-primary full-width margin-top prepare-save-btn">
-            ✦ Prepare Chart &amp; Save Profile
-          </button>
-          {prepareFlash === 'name-required' && (
-            <p className="prepare-flash err">⚠ Enter a Name above so this can be saved as a profile.</p>
-          )}
-          {prepareFlash === 'saved' && (
-            <p className="prepare-flash ok">✓ Chart ready — profile created &amp; synced to your account.</p>
-          )}
-          {prepareFlash === 'updated' && (
-            <p className="prepare-flash ok">✓ Chart ready — existing profile updated &amp; synced.</p>
-          )}
-
-          {/* Persistence status strip */}
-          <div className="persistence-strip">
-            <div className="persist-item">
-              <span className="persist-dot persist-green" />
-              <span>Birth details auto-saved</span>
-            </div>
-            <div className="persist-item">
-              <span className="persist-dot persist-green" />
-              <span>{lifeEvents.length} life events saved</span>
-            </div>
-            <div className="persist-item">
-              <span className="persist-dot persist-green" />
-              <span>{savedProfiles.length} profile{savedProfiles.length !== 1 ? 's' : ''} in memory</span>
-            </div>
-            <button
-              type="button"
-              className="persist-clear-btn"
-              title="Clear all saved data"
-              onClick={() => {
-                if (window.confirm('Clear all saved data (birth details, life events, profiles, predictions)?')) {
-                  ['astro_birth_details','astro_life_events','astro_saved_profiles','astro_saved_predictions','astro_csv_autoloaded'].forEach(k => localStorage.removeItem(k));
-                  window.location.reload();
-                }
-              }}
-            >
-              Clear all data
-            </button>
-          </div>
-          </>)}
-        </section>
-
-        {/* Right Side: Tabbed Display & Output Panel */}
-        <section className="display-panel glass-card">
-          
-          {/* Tab Navigation Menu */}
-          <nav className="tab-menu">
-            {TABS.map((tab, i) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                title={`${tab.label} (press ${i + 1})`}
-              >
-                <span className="tab-icon">{tab.icon}</span>
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-
-          {/* Active tab description + shortcut hint */}
-          <div className="tab-hint">
-            <span>{TABS.find(t => t.id === activeTab)?.desc}</span>
-            <span className="tab-hint-keys">Tip: press <kbd>1</kbd>–<kbd>6</kbd> to switch tabs</span>
-          </div>
-
-          {/* Separator */}
-          <div className="separator"></div>
-
-          {/* Empty state when no chart has been generated yet */}
-          {!natalChart && !['historical-transits', 'panchanga', 'compatibility'].includes(activeTab) && (
-            <div className="empty-state">
-              <span className="empty-state-icon">☉</span>
-              <h3>No Birth Chart Yet</h3>
-              <p>
-                Enter your birth date, time and place in the panel on the left
-                (use the online place search to fill coordinates automatically),
-                then generate your chart to unlock every tab.
-              </p>
-              <button className="btn btn-primary" onClick={handleGenerateNatal}>
-                ✦ Generate Birth Chart
-              </button>
-            </div>
-          )}
-
-
-          {/* Lazy-loaded tab content */}
-          <Suspense fallback={<div className="tab-loading" style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)' }}>✦ Loading…</div>}>
-            {activeTab === 'birth-chart' && natalChart && (
-              <BirthChartTab
-                birthDetails={birthDetails} natalChart={natalChart} dashaData={dashaData}
-                trikBhavaAnalysis={trikBhavaAnalysis} chartSummary={chartSummary} setActiveTab={setActiveTab}
-              />
+            {/* Empty state when no chart has been generated yet */}
+            {!natalChart && !['historical-transits', 'panchanga', 'compatibility'].includes(activeTab) && (
+              <div className="empty-state">
+                <ZodiacWheel size={96} spin className="empty-state-wheel" />
+                <h3>No Birth Chart Yet</h3>
+                <p>
+                  Add a birth date, time and place — search the city and the coordinates
+                  and timezone fill in automatically — to unlock every section.
+                </p>
+                <button className="btn btn-primary" onClick={() => setShowBirthEditor(true)}>
+                  ✦ Enter birth details
+                </button>
+              </div>
             )}
 
-            {activeTab === 'interactive-chart' && natalChart && (
-              <InteractiveChartTab
-                natalChart={natalChart} transitChart={transitChart} vargaCharts={vargaCharts}
-                transitDateInput={transitDateInput} setTransitDateInput={setTransitDateInput}
-                transitTimeInput={transitTimeInput} setTransitTimeInput={setTransitTimeInput}
-                showNakshatras={showNakshatras} setShowNakshatras={setShowNakshatras}
-                onZoom={setZoomId}
-              />
-            )}
+            {/* Lazy-loaded tab content. Keyed by tab so each one gets the entry animation. */}
+            <Suspense fallback={
+              <div className="tab-loading" role="status">
+                <ZodiacWheel size={56} spin variant="mark" />
+                <span>Reading the stars…</span>
+              </div>
+            }>
+              <div className="tab-stage" key={activeTab}>
+                {activeTab === 'birth-chart' && natalChart && (
+                  <BirthChartTab
+                    birthDetails={birthDetails} natalChart={natalChart} dashaData={dashaData}
+                    trikBhavaAnalysis={trikBhavaAnalysis} chartSummary={chartSummary} setActiveTab={selectTab}
+                  />
+                )}
 
-            {activeTab === 'historical-transits' && (
-              <HistoricalTransitsTab
-                selectedTransitPlanet={selectedTransitPlanet} setSelectedTransitPlanet={setSelectedTransitPlanet}
-                historicalTransits={historicalTransits} scanningTransits={scanningTransits}
-                handleScanHistoricalTransits={handleScanHistoricalTransits}
-              />
-            )}
+                {activeTab === 'interactive-chart' && natalChart && (
+                  <InteractiveChartTab
+                    natalChart={natalChart} transitChart={transitChart} vargaCharts={vargaCharts}
+                    transitDateInput={transitDateInput} setTransitDateInput={setTransitDateInput}
+                    transitTimeInput={transitTimeInput} setTransitTimeInput={setTransitTimeInput}
+                    showNakshatras={showNakshatras} setShowNakshatras={setShowNakshatras}
+                    onZoom={setZoomId}
+                  />
+                )}
 
-            {activeTab === 'predictions' && natalChart && (
-              <PredictionsTab
-                natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
-                lifeEvents={lifeEvents} isAdmin={isAdmin}
-                autoMatches={autoMatches} autoMatchesComputed={autoMatchesComputed} autoMatchesLoading={autoMatchesLoading}
-                expandedAutoMatch={expandedAutoMatch} setExpandedAutoMatch={setExpandedAutoMatch}
-                setAutoMatchesKey={setAutoMatchesKey} setAutoMatches={setAutoMatches}
-                savedPredictions={savedPredictions}
-                handleLoadSavedPrediction={handleLoadSavedPrediction} handleDeleteSavedPrediction={handleDeleteSavedPrediction}
-                csvPreviewEvents={csvPreviewEvents} setCsvPreviewEvents={setCsvPreviewEvents}
-                dragActive={dragActive} csvError={csvError}
-                handleDrag={handleDrag} handleDrop={handleDrop} handleFileChange={handleFileChange}
-                handleLoadWorkspaceCSV={handleLoadWorkspaceCSV} handleBulkImport={handleBulkImport}
-                handleUpdatePreviewEvent={handleUpdatePreviewEvent} handleToggleSelectAllPreview={handleToggleSelectAllPreview}
-                newEvent={newEvent} setNewEvent={setNewEvent}
-                addEventFormOpen={addEventFormOpen} setAddEventFormOpen={setAddEventFormOpen}
-                eventsListOpen={eventsListOpen} setEventsListOpen={setEventsListOpen}
-                selectedEventId={selectedEventId} predicting={predicting} predictionResults={predictionResults}
-                handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handlePredictFuture={handlePredictFuture}
-                predictionSaveNameInput={predictionSaveNameInput} setPredictionSaveNameInput={setPredictionSaveNameInput}
-                handleSaveCurrentPrediction={handleSaveCurrentPrediction}
-              />
-            )}
+                {activeTab === 'historical-transits' && (
+                  <HistoricalTransitsTab
+                    selectedTransitPlanet={selectedTransitPlanet} setSelectedTransitPlanet={setSelectedTransitPlanet}
+                    historicalTransits={historicalTransits} scanningTransits={scanningTransits}
+                    handleScanHistoricalTransits={handleScanHistoricalTransits}
+                  />
+                )}
 
-            {activeTab === 'alignment-transits' && natalChart && (
-              <AlignmentsTab
-                handleScanDegreeAlignments={handleScanDegreeAlignments}
-                scanningAlignments={scanningAlignments} hasScannedAlignments={hasScannedAlignments}
-                degreeAlignments={degreeAlignments}
-              />
-            )}
+                {activeTab === 'predictions' && natalChart && (
+                  <PredictionsTab
+                    natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
+                    lifeEvents={lifeEvents} isAdmin={isAdmin}
+                    autoMatches={autoMatches} autoMatchesComputed={autoMatchesComputed} autoMatchesLoading={autoMatchesLoading}
+                    expandedAutoMatch={expandedAutoMatch} setExpandedAutoMatch={setExpandedAutoMatch}
+                    setAutoMatchesKey={setAutoMatchesKey} setAutoMatches={setAutoMatches}
+                    savedPredictions={savedPredictions}
+                    handleLoadSavedPrediction={handleLoadSavedPrediction} handleDeleteSavedPrediction={handleDeleteSavedPrediction}
+                    csvPreviewEvents={csvPreviewEvents} setCsvPreviewEvents={setCsvPreviewEvents}
+                    dragActive={dragActive} csvError={csvError}
+                    handleDrag={handleDrag} handleDrop={handleDrop} handleFileChange={handleFileChange}
+                    handleLoadWorkspaceCSV={handleLoadWorkspaceCSV} handleBulkImport={handleBulkImport}
+                    handleUpdatePreviewEvent={handleUpdatePreviewEvent} handleToggleSelectAllPreview={handleToggleSelectAllPreview}
+                    newEvent={newEvent} setNewEvent={setNewEvent}
+                    addEventFormOpen={addEventFormOpen} setAddEventFormOpen={setAddEventFormOpen}
+                    eventsListOpen={eventsListOpen} setEventsListOpen={setEventsListOpen}
+                    selectedEventId={selectedEventId} predicting={predicting} predictionResults={predictionResults}
+                    handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handlePredictFuture={handlePredictFuture}
+                    predictionSaveNameInput={predictionSaveNameInput} setPredictionSaveNameInput={setPredictionSaveNameInput}
+                    handleSaveCurrentPrediction={handleSaveCurrentPrediction}
+                  />
+                )}
 
-            {activeTab === 'dasha-system' && natalChart && dashaData && (
-              <DashaTab
-                natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
-                expandedDasha={expandedDasha} setExpandedDasha={setExpandedDasha}
-              />
-            )}
+                {activeTab === 'alignment-transits' && natalChart && (
+                  <AlignmentsTab
+                    handleScanDegreeAlignments={handleScanDegreeAlignments}
+                    scanningAlignments={scanningAlignments} hasScannedAlignments={hasScannedAlignments}
+                    degreeAlignments={degreeAlignments}
+                  />
+                )}
 
-            {activeTab === 'panchanga' && <PanchangaTab birthDetails={birthDetails} />}
+                {activeTab === 'dasha-system' && natalChart && dashaData && (
+                  <DashaTab
+                    natalChart={natalChart} dashaData={dashaData} activePDFData={activePDFData}
+                    expandedDasha={expandedDasha} setExpandedDasha={setExpandedDasha}
+                  />
+                )}
 
-            {activeTab === 'compatibility' && <CompatibilityTab savedProfiles={savedProfiles} />}
-          </Suspense>
-        </section>
-      </main>
+                {activeTab === 'panchanga' && <PanchangaTab birthDetails={birthDetails} />}
+
+                {activeTab === 'compatibility' && <CompatibilityTab savedProfiles={savedProfiles} />}
+              </div>
+            </Suspense>
+          </section>
+        </main>
+      </div>
+
+      {/* Birth details slide-over */}
+      <BirthDetailsDrawer
+        open={showBirthEditor} onClose={closeBirthEditor}
+        birthDetails={birthDetails} setBirthDetails={setBirthDetails}
+        searchQuery={searchQuery} setSearchQuery={setSearchQuery} handleSearchLocation={handleSearchLocation}
+        geocodingLoading={geocodingLoading} geocodingError={geocodingError}
+        geocodingResults={geocodingResults} applyPlace={applyPlace}
+        activeProfile={activeProfile}
+        onSyncProfile={() => { handleUpdateActiveProfileData(); notify(`Profile “${activeProfile?.profileName}” updated`); }}
+        onPrepareAndSave={handlePrepareAndSave} prepareFlash={prepareFlash}
+        lifeEventsCount={lifeEvents.length} profilesCount={savedProfiles.length}
+      />
+
+      <Toaster toasts={toasts} onDismiss={dismissToast} />
 
       {/* Back to top button */}
       {showTopBtn && (

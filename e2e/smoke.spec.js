@@ -3,6 +3,7 @@
 // sign-in screen; without it, the dashboard renders directly. Both are valid
 // boots — a blank page or console crash is the failure we're guarding against.
 import { test, expect } from '@playwright/test';
+import { AppShell } from './pages/AppShell.js';
 
 test.describe('app boot', () => {
   test('loads without console errors and renders a known screen', async ({ page }) => {
@@ -15,37 +16,31 @@ test.describe('app boot', () => {
       errors.push(msg.text());
     });
 
-    await page.goto('/');
-
-    // Either the auth screen or the main dashboard must appear.
-    const authScreen = page.locator('.auth-screen');
-    const dashboard = page.locator('.app-container');
-    await expect(authScreen.or(dashboard).first()).toBeVisible({ timeout: 15_000 });
+    const app = new AppShell(page);
+    await app.goto('/');
 
     // No uncaught runtime errors during boot.
     expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
-  test('dashboard flow: tabs render and switch (when auth is not enforced)', async ({ page }) => {
-    await page.goto('/');
-    const dashboard = page.locator('.app-container');
+  test('dashboard flow: sections render and switch (when auth is not enforced)', async ({ page }) => {
+    const app = new AppShell(page);
+    await app.goto('/');
     // Skip gracefully when the deployment enforces sign-in.
-    if (!(await dashboard.isVisible().catch(() => false))) {
-      test.skip(true, 'Auth gate active — dashboard flow needs a session');
-    }
+    test.skip(await app.isAuthGated(), 'Auth gate active — dashboard flow needs a session');
 
-    // All 8 tabs exist.
+    // All 8 sections exist in the side navigation.
     await expect(page.locator('.tab-btn')).toHaveCount(8);
 
-    // Birth chart tab shows the planetary table by default (chart auto-computes).
+    // Birth chart section shows the planetary table by default (chart auto-computes).
     await expect(page.locator('.planetary-table').first()).toBeVisible();
 
-    // Switch to Panchanga — self-sufficient tab, needs no chart.
-    await page.getByRole('button', { name: /Panchanga/ }).click();
-    await expect(page.getByText('Five Limbs of the Vedic Day')).toBeVisible();
+    // Switch to Panchanga — self-sufficient section, needs no chart.
+    await app.section(/Panchanga/).click();
+    await expect(page.getByRole('heading', { name: /Five Limbs of the Vedic Day/ })).toBeVisible();
 
     // Switch to Compatibility — renders its empty state without profiles.
-    await page.getByRole('button', { name: /Compatibility/ }).click();
+    await app.section(/Compatibility/).click();
     await expect(page.getByText(/Ashtakoota Compatibility/).first()).toBeVisible();
   });
 
@@ -56,11 +51,11 @@ test.describe('app boot', () => {
       placeName: 'New Delhi, India', latitude: 28.6139, longitude: 77.209, timezone: 5.5,
     })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-    await page.goto(`/?chart=${payload}`);
-    const dashboard = page.locator('.app-container');
-    if (!(await dashboard.isVisible().catch(() => false))) {
-      test.skip(true, 'Auth gate active — shared chart renders after sign-in');
-    }
+    const app = new AppShell(page);
+    await app.goto(`/?chart=${payload}`);
+    test.skip(await app.isAuthGated(), 'Auth gate active — shared chart renders after sign-in');
+
     await expect(page.getByText('shared chart')).toBeVisible();
+    await expect(app.chartCard.getByRole('heading', { name: 'Shared Person' })).toBeVisible();
   });
 });
