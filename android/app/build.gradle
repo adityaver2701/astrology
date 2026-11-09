@@ -7,8 +7,11 @@ android {
         applicationId "dev.penetacle.astrology"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // versionCode 2 = first APK with the Google sign-in deep link. The JS
+        // (src/native/index.js, MIN_NATIVE_BUILD_FOR_GOOGLE) only offers Google
+        // sign-in on builds >= 2, because older APKs can't receive the redirect.
+        versionCode 2
+        versionName "1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

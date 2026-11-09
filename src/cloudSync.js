@@ -2,7 +2,8 @@
 // Backed by @supabase/supabase-js (see ./supabaseClient.js).
 //
 // Three responsibilities:
-//   1. Auth  — email/password register, login, logout, session/state.
+//   1. Auth  — email/password register, login, Google (OAuth), logout,
+//              session/state.
 //   2. Data  — each signed-in user owns ONE row in `astro_sync`, keyed by
 //              user_id = auth.uid(). Row Level Security guarantees a user can
 //              only ever read/write their own row, so no user can see another
@@ -70,6 +71,107 @@ export async function signIn(email, password) {
   const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
   if (error) throw friendlyAuthError(error);
   return { user: data.user, session: data.session };
+}
+
+// ── Google sign-in (OAuth via Supabase) ────────────────────────────────────
+// Web: a normal full-page redirect to Google and back; supabase-js
+// (detectSessionInUrl) picks the tokens up from the URL when the app reloads.
+//
+// Android: Google refuses to show its sign-in page inside an embedded WebView
+// ("disallowed_useragent"), so the app opens the system browser instead —
+// Capacitor hands any navigation to a non-app host to the browser — and Google
+// → Supabase → redirects to the custom scheme below. The App plugin's
+// appUrlOpen event (src/native/index.js) brings the app back to the front and
+// completeOAuthFromUrl() turns the returned tokens into a session.
+//
+// Server-side setup (Google Cloud OAuth client + Supabase provider + redirect
+// allow-list) is in SUPABASE_AUTH_SETUP.md, "Step 3 — Sign in with Google".
+export const NATIVE_OAUTH_REDIRECT = 'dev.penetacle.astrology://login-callback';
+
+/**
+ * Which external sign-in providers the Supabase project has switched on, read
+ * from the public /auth/v1/settings endpoint. Lets the sign-in screen hide the
+ * Google button until the provider is actually configured — otherwise a click
+ * would land on Supabase's raw "provider is not enabled" JSON page.
+ * @returns {Promise<{google: boolean}>}
+ */
+export async function getAuthProviders() {
+  const cfg = getSupabaseConfig();
+  if (!cfg) return { google: false };
+  try {
+    const res = await fetch(`${cfg.url.replace(/\/+$/, '')}/auth/v1/settings`, {
+      headers: { apikey: cfg.anonKey },
+    });
+    if (!res.ok) return { google: false };
+    const json = await res.json();
+    return { google: !!json?.external?.google };
+  } catch {
+    return { google: false };
+  }
+}
+
+/** Start "Continue with Google". On the web this navigates away from the page. */
+export async function signInWithGoogle({ native = false } = {}) {
+  const sb = requireClient();
+  const redirectTo = native ? NATIVE_OAUTH_REDIRECT : window.location.origin;
+  const { data, error } = await sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      // Always show Google's account chooser, so a shared phone/PC doesn't
+      // silently sign in with whichever Google account is already active.
+      queryParams: { prompt: 'select_account' },
+      skipBrowserRedirect: native,
+    },
+  });
+  if (error) throw friendlyAuthError(error);
+  if (native && data?.url) {
+    // Off-origin navigation → Capacitor opens it in the system browser.
+    window.location.href = data.url;
+  }
+}
+
+/**
+ * Finish an OAuth sign-in from the URL the provider redirected back to
+ * (Android deep link). Handles both the implicit flow (#access_token=…) and
+ * PKCE (?code=…), and surfaces provider errors (e.g. the user cancelled).
+ * @param {string} url
+ */
+export async function completeOAuthFromUrl(url) {
+  const sb = requireClient();
+  const u = new URL(url);
+  const params = new URLSearchParams(u.hash.replace(/^#/, ''));
+  new URLSearchParams(u.search).forEach((v, k) => { if (!params.has(k)) params.set(k, v); });
+
+  const err = params.get('error_description') || params.get('error');
+  if (err) throw new Error(oauthErrorMessage(err, params.get('error')));
+
+  const code = params.get('code');
+  if (code) {
+    const { error } = await sb.auth.exchangeCodeForSession(code);
+    if (error) throw friendlyAuthError(error);
+    return;
+  }
+  const access_token = params.get('access_token');
+  const refresh_token = params.get('refresh_token');
+  if (!access_token || !refresh_token) throw new Error('Google sign-in did not complete. Please try again.');
+  const { error } = await sb.auth.setSession({ access_token, refresh_token });
+  if (error) throw friendlyAuthError(error);
+}
+
+/**
+ * Human wording for the error a provider put in the redirect URL.
+ * @param {string} raw   error_description (or error) value
+ * @param {string} [code] the `error` code, e.g. "access_denied"
+ */
+export function oauthErrorMessage(raw, code) {
+  let msg = String(raw || '').replace(/\+/g, ' ');
+  try { msg = decodeURIComponent(msg); } catch { /* already decoded */ }
+  if (code === 'access_denied' || /access_denied|cancel|denied/i.test(msg)) return 'Google sign-in was cancelled.';
+  if (/provider is not enabled|Unsupported provider/i.test(msg)) {
+    return 'Google sign-in isn’t available yet. Please sign in with your email and password.';
+  }
+  return `Google sign-in failed: ${msg}`;
 }
 
 /** Sign the current user out. */
@@ -385,6 +487,9 @@ function friendlyAuthError(error) {
   }
   if (/Password should be at least/i.test(msg)) {
     return new Error('Password is too short (minimum 6 characters).');
+  }
+  if (/provider is not enabled|Unsupported provider/i.test(msg)) {
+    return new Error(oauthErrorMessage(msg));
   }
   if (/rate limit|too many/i.test(msg)) {
     return new Error('Too many attempts — please wait a minute and try again.');

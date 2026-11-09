@@ -22,7 +22,7 @@ import AuthScreen from './AuthScreen';
 import GuideTour from './GuideTour';
 import AdminDashboard from './AdminDashboard';
 import ClaudeChat from './ClaudeChat';
-import KundaliChart from './components/KundaliChart';
+import ChartZoomModal from './components/ChartZoomModal';
 import SyncSettingsModal from './components/SyncSettingsModal';
 import ProfileManagerModal from './components/ProfileManagerModal';
 import MobileNav from './components/MobileNav';
@@ -569,6 +569,7 @@ function App() {
       const close = (fn) => { e.preventDefault(); fn(); };
       if (showMoreSheet) return close(() => setShowMoreSheet(false));
       if (openMenu) return close(() => setOpenMenu(null));
+      if (zoomId) return close(() => setZoomId(null));
       if (showClaudeChat) return close(() => setShowClaudeChat(false));
       if (showAdmin) return close(() => setShowAdmin(false));
       if (showGuide) return close(() => setShowGuide(false));
@@ -582,7 +583,7 @@ function App() {
     window.addEventListener('astro:backbutton', onBack);
     return () => window.removeEventListener('astro:backbutton', onBack);
   }, [showMoreSheet, showClaudeChat, showAdmin, showGuide, showSyncSettings,
-      showProfileManager, showBirthEditor, openMenu, activeTab]);
+      showProfileManager, showBirthEditor, openMenu, zoomId, activeTab]);
 
   // Advanced: override the Supabase URL/key (most users never need this — the
   // app ships pre-configured). Saving reloads so the auth client re-inits.
@@ -1600,33 +1601,15 @@ function App() {
         <ClaudeChat onClose={() => setShowClaudeChat(false)} />
       )}
 
-      {/* Enlarged chart viewer with prev/next across all charts */}
-      {(() => {
-        if (!zoomId) return null;
-        const idx = allCharts.findIndex(c => c.id === zoomId);
-        if (idx < 0) return null;
-        const cur = allCharts[idx];
-        return (
-          <div className="chart-zoom-overlay" onClick={() => setZoomId(null)}>
-            <div className="chart-zoom-modal" onClick={e => e.stopPropagation()}>
-              <div className="chart-zoom-head">
-                <h3 className="chart-zoom-title">{cur.title}</h3>
-                <button className="pm-close" onClick={() => setZoomId(null)} aria-label="Close">✕</button>
-              </div>
-              <div className="chart-zoom-body">
-                <button className="chart-zoom-nav" disabled={idx <= 0}
-                  onClick={() => setZoomId(allCharts[idx - 1].id)} aria-label="Previous chart">‹</button>
-                <div className="chart-zoom-svg">
-                  <KundaliChart planets={cur.planets} lagnaSign={cur.lagnaSign} />
-                </div>
-                <button className="chart-zoom-nav" disabled={idx >= allCharts.length - 1}
-                  onClick={() => setZoomId(allCharts[idx + 1].id)} aria-label="Next chart">›</button>
-              </div>
-              <p className="chart-zoom-sub">{cur.subtitle} · {idx + 1} / {allCharts.length}</p>
-            </div>
-          </div>
-        );
-      })()}
+      {/* Enlarged chart viewer with prev/next across all charts. The transit
+          chart stays draggable/scrubbable when enlarged. */}
+      {zoomId && (
+        <ChartZoomModal
+          charts={allCharts} zoomId={zoomId} setZoomId={setZoomId}
+          transitDateInput={transitDateInput} setTransitDateInput={setTransitDateInput}
+          transitTimeInput={transitTimeInput} setTransitTimeInput={setTransitTimeInput}
+        />
+      )}
       {/* Sticky app bar: brand, profile switcher, actions, account */}
       <TopBar
         openMenu={openMenu} setOpenMenu={setOpenMenu}
@@ -1715,7 +1698,7 @@ function App() {
                 {activeTab === 'birth-chart' && natalChart && (
                   <BirthChartTab
                     birthDetails={birthDetails} natalChart={natalChart} dashaData={dashaData}
-                    trikBhavaAnalysis={trikBhavaAnalysis} chartSummary={chartSummary} setActiveTab={selectTab}
+                    trikBhavaAnalysis={trikBhavaAnalysis} chartSummary={chartSummary} vargaCharts={vargaCharts} setActiveTab={selectTab}
                   />
                 )}
 
@@ -1801,7 +1784,8 @@ function App() {
       <Toaster toasts={toasts} onDismiss={dismissToast} />
 
       {/* Back to top button */}
-      {showTopBtn && (
+      {/* Hidden while a full-screen overlay is up — it sits above them (z 900). */}
+      {showTopBtn && !zoomId && !showGuide && (
         <button className="back-to-top" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title="Back to top">↑</button>
       )}
 

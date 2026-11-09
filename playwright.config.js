@@ -1,13 +1,18 @@
 // ── Playwright E2E configuration ───────────────────────────────────────────
 // Run once after `npm install`:  npx playwright install chromium
 // Then:                          npm run test:e2e
-// The dev server is started automatically (vite on :5173) unless BASE_URL is
-// set, e.g. to test the live site:
+// A dedicated dev server is started automatically on :5175 in Vite's `e2e`
+// mode (see vite.config.js — sign-in gate and Sentry off, so the dashboard
+// specs run instead of skipping at the login screen). It uses its own port so it
+// never reuses the auth-enabled `npm run dev` server on :5173.
+// Set BASE_URL to test a deployed site instead, e.g. the live one:
 //   BASE_URL=https://astrology.penetacle.workers.dev npx playwright test
+//   (PowerShell: $env:BASE_URL="https://astrology.penetacle.workers.dev"; npx playwright test)
 import { defineConfig, devices } from '@playwright/test';
 
 const remote = !!process.env.BASE_URL;
-const baseURL = process.env.BASE_URL || 'http://localhost:5173';
+const E2E_PORT = 5175;
+const baseURL = process.env.BASE_URL || `http://localhost:${E2E_PORT}`;
 
 export default defineConfig({
   testDir: './e2e',
@@ -26,8 +31,8 @@ export default defineConfig({
   ],
   // Only spin up the local dev server when not targeting a remote URL.
   webServer: remote ? undefined : {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
+    command: `npx vite --mode e2e --port ${E2E_PORT} --strictPort`,
+    url: `http://localhost:${E2E_PORT}`,
     reuseExistingServer: true,
     timeout: 60_000,
   },

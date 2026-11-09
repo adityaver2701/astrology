@@ -1,4 +1,5 @@
 import AIReading from '../AIReading';
+import PromptGenerator from '../components/PromptGenerator';
 import { SIGNS, NAKSHATRAS, DASHA_YEARS, getCurrentDasha, getPlanetDignity } from '../astrologyEngine';
 import { PLANET_NAMES, PLANET_GLYPHS, formatDegrees } from '../constants';
 import { DUSTHANA_INTERPRETATIONS } from '../dusthanaInterpretations';
@@ -36,7 +37,7 @@ function buildRows(natalChart) {
   return rows;
 }
 
-export default function BirthChartTab({ birthDetails, natalChart, dashaData, trikBhavaAnalysis, chartSummary, setActiveTab }) {
+export default function BirthChartTab({ birthDetails, natalChart, dashaData, trikBhavaAnalysis, chartSummary, vargaCharts, setActiveTab }) {
   const rows = buildRows(natalChart);
   return (
             <div className="tab-content-fade">
@@ -120,6 +121,11 @@ export default function BirthChartTab({ birthDetails, natalChart, dashaData, tri
                   </li>
                 ))}
               </ul>
+
+              <PromptGenerator
+                birthDetails={birthDetails} natalChart={natalChart}
+                dashaData={dashaData} vargaCharts={vargaCharts}
+              />
 
               {/* ✨ AI Reading (Cloudflare Workers AI) */}
               <AIReading

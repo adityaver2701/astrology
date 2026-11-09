@@ -302,6 +302,33 @@ inside the app are shareable as-is.
 
 ---
 
+## 6a. Google sign-in
+
+"Continue with Google" can't run inside the WebView (Google rejects embedded
+browsers with `disallowed_useragent`), so the app opens the **system browser**
+and Google → Supabase sends the user back to
+`dev.penetacle.astrology://login-callback`. Three pieces make that work:
+
+- An intent filter for that scheme in
+  `android/app/src/main/AndroidManifest.xml` (already added).
+- `src/native/index.js` listens for `appUrlOpen` (and `getLaunchUrl()` after a
+  cold start) and calls `completeOAuthFromUrl()` in `src/cloudSync.js`.
+- `dev.penetacle.astrology://login-callback` listed under Supabase →
+  Authentication → URL Configuration → Redirect URLs (SUPABASE_AUTH_SETUP.md,
+  Step 3).
+
+Because the intent filter is native, **this needs a new APK** — an OTA update
+can't add it. `versionCode` was bumped to **2** for that build, and the JS only
+shows the Google button on native builds `>= MIN_NATIVE_BUILD_FOR_GOOGLE` (2),
+so phones still on the old APK keep plain email sign-in instead of being sent
+to a browser they can't come back from. Release steps: `npm run android:apk`
+(or `android:bundle`), then install/publish as usual.
+
+Quick check on a device: `adb shell am start -W -a android.intent.action.VIEW -d "dev.penetacle.astrology://login-callback#error=access_denied"`
+should bring the app forward and show "Google sign-in was cancelled."
+
+---
+
 ## 7. Troubleshooting
 
 **"AI Reading" fails only in the app.**

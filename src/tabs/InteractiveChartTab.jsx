@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
 import KundaliChart from '../components/KundaliChart';
+import TransitScrubber from '../components/TransitScrubber';
+import { useTransitDrag } from '../hooks/useTransitDrag';
 import { SIGNS } from '../astrologyEngine';
-import { PLANET_PERIODS_DAYS, formatDegrees } from '../constants';
+import { formatDegrees } from '../constants';
 
 export default function InteractiveChartTab({
   natalChart, transitChart, vargaCharts,
@@ -10,52 +11,10 @@ export default function InteractiveChartTab({
   showNakshatras, setShowNakshatras,
   onZoom,
 }) {
-  // Transit drag-to-scrub state (local to this tab)
-  const [transitDragInfo, setTransitDragInfo] = useState(null); // { planetId, startAngle, startDateMs }
-  const transitSvgRef = useRef(null);
-
-  const handleDragStart = (planetId, startAngle) => setTransitDragInfo({
-    planetId, startAngle,
-    startDateMs: new Date(`${transitDateInput}T${transitTimeInput}Z`).getTime(),
+  // Transit drag-to-scrub (shared with the enlarged chart — hooks/useTransitDrag.js)
+  const { dragInfo: transitDragInfo, svgRef: transitSvgRef, onDragStart: handleDragStart } = useTransitDrag({
+    transitDateInput, transitTimeInput, setTransitDateInput, setTransitTimeInput,
   });
-
-  // Mouse/touch drag → time scrub on transit chart
-  useEffect(() => {
-    if (!transitDragInfo) return;
-    const getSvgAngle = (clientX, clientY) => {
-      const el = transitSvgRef.current;
-      if (!el) return 0;
-      const r = el.getBoundingClientRect();
-      const x = (clientX - r.left) / r.width * 400 - 200;
-      const y = (clientY - r.top) / r.height * 400 - 200;
-      return Math.atan2(x, -y); // 0 = top, clockwise positive
-    };
-    const onMove = (e) => {
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      let delta = getSvgAngle(clientX, clientY) - transitDragInfo.startAngle;
-      // Normalise to [-π, π]
-      while (delta > Math.PI)  delta -= 2 * Math.PI;
-      while (delta < -Math.PI) delta += 2 * Math.PI;
-      const period = PLANET_PERIODS_DAYS[transitDragInfo.planetId] || 365.25;
-      // Counterclockwise drag (delta < 0) = forward in time for prograde planets
-      const newMs = transitDragInfo.startDateMs - (delta / (2 * Math.PI)) * period * 86400000;
-      const d = new Date(newMs);
-      setTransitDateInput(d.toISOString().split('T')[0]);
-      setTransitTimeInput(d.toISOString().substring(11, 16));
-    };
-    const onUp = () => setTransitDragInfo(null);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup',   onUp);
-    window.addEventListener('touchmove', onMove, { passive: true });
-    window.addEventListener('touchend',  onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup',   onUp);
-      window.removeEventListener('touchmove', onMove);
-      window.removeEventListener('touchend',  onUp);
-    };
-  }, [transitDragInfo, setTransitDateInput, setTransitTimeInput]);
 
   // Small magnifier button overlaid on each chart; opens the enlarge modal.
   const zoomBtn = (id) => (
@@ -143,27 +102,10 @@ export default function InteractiveChartTab({
               <div className="transit-slider-controls glass-subcard">
                 <h4 className="card-subtitle">Real-Time Transit Scrubber</h4>
                 
-                <div className="slider-row">
-                  <div className="input-group flex-1">
-                    <label htmlFor="transitDate" className="input-label">Transit Date</label>
-                    <input
-                      type="date"
-                      id="transitDate"
-                      value={transitDateInput}
-                      onChange={(e) => setTransitDateInput(e.target.value)}
-                      className="text-input"
-                    />
-                  </div>
-                  <div className="input-group flex-1">
-                    <label htmlFor="transitTime" className="input-label">Transit Time (UTC)</label>
-                    <input
-                      type="time"
-                      id="transitTime"
-                      value={transitTimeInput}
-                      onChange={(e) => setTransitTimeInput(e.target.value)}
-                      className="text-input"
-                    />
-                  </div>
+                <TransitScrubber
+                  transitDateInput={transitDateInput} setTransitDateInput={setTransitDateInput}
+                  transitTimeInput={transitTimeInput} setTransitTimeInput={setTransitTimeInput}
+                >
                   <div className="input-group flex-1 checkbox-group">
                     <label className="checkbox-label">
                       <input
@@ -174,43 +116,7 @@ export default function InteractiveChartTab({
                       Show Nakshatras
                     </label>
                   </div>
-                </div>
-
-                {/* Timeline scrubber: direct date control, monthly precision, 1950–2060 */}
-                <div className="scrubber-range-container">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                    <label htmlFor="yearScrubber" className="input-label" style={{ marginBottom: 0 }}>
-                      Timeline Scrubber
-                    </label>
-                    <span style={{ fontSize: '12px', color: 'var(--accent-gold)', fontWeight: 'bold' }}>
-                      {new Date(`${transitDateInput}T12:00:00Z`).toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    id="yearScrubber"
-                    min="1950"
-                    max="2060"
-                    step="0.0833"
-                    value={(() => {
-                      const d = new Date(`${transitDateInput}T12:00:00Z`);
-                      return d.getFullYear() + d.getMonth() / 12;
-                    })()}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value);
-                      const year = Math.floor(val);
-                      const month = Math.round((val - year) * 12);
-                      const d = new Date(Date.UTC(year, month, 1));
-                      setTransitDateInput(d.toISOString().split('T')[0]);
-                    }}
-                    className="range-scrubber"
-                  />
-                  <div className="scrubber-legend">
-                    <span>1950</span>
-                    <span>2005</span>
-                    <span>2060</span>
-                  </div>
-                </div>
+                </TransitScrubber>
               </div>
 
               {/* Transit Nakshatra Info if enabled */}

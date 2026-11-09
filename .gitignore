@@ -65,3 +65,6 @@ android/captures/
 *.keystore
 *.jks
 keystore.properties
+
+# SSH / TLS private keys
+*.pem

@@ -232,7 +232,13 @@ export default function TopBar({
                 <div className="menu menu-right" role="menu" aria-label="Account">
                   <div className="menu-account">
                     <span className="menu-item-meta">Signed in as</span>
-                    <strong>{user.email}</strong>
+                    {user.user_metadata?.full_name && <strong>{user.user_metadata.full_name}</strong>}
+                    <span className={user.user_metadata?.full_name ? 'menu-item-meta' : undefined}>
+                      {user.user_metadata?.full_name ? user.email : <strong>{user.email}</strong>}
+                    </span>
+                    {user.app_metadata?.provider === 'google' && (
+                      <span className="menu-item-meta">via Google</span>
+                    )}
                     <span className="menu-item-meta"><span className={`sync-dot sync-${syncStatus}`} /> {SYNC_LABEL[syncStatus] || ''}</span>
                   </div>
                   <div className="menu-sep" role="separator" />

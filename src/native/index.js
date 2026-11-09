@@ -11,6 +11,8 @@
 //   4. Resume hooks → re-pull cloud data and check for a live update, so the
 //      app matches whatever the website is showing.
 //   5. Push notifications (FCM → Azure Notification Hubs), see ./push.js.
+//   6. Deep links → finish "Continue with Google" (OAuth returns to the app
+//      via the dev.penetacle.astrology://login-callback custom scheme).
 //
 // The app dispatches/consumes two custom events on `window`:
 //   'astro:resume'  → fired when the app returns to the foreground (or the web
@@ -19,6 +21,26 @@
 //   'astro:online'  → fired when connectivity is restored.
 
 import { isNative } from '../apiBase.js';
+import { NATIVE_OAUTH_REDIRECT, completeOAuthFromUrl } from '../cloudSync.js';
+
+// Google sign-in needs the deep-link intent filter in AndroidManifest.xml,
+// which only ships in a NEW APK — but the JS reaches installed apps through
+// OTA updates. So the sign-in screen only offers Google on native builds whose
+// versionCode (android/app/build.gradle) is at least this; older APKs keep
+// email sign-in and are never sent to a browser they can't return from.
+export const MIN_NATIVE_BUILD_FOR_GOOGLE = 2;
+
+/** True on the web; on Android, true only for APKs that can handle the OAuth return. */
+export async function nativeSupportsGoogleSignIn() {
+  if (!isNative()) return true;
+  try {
+    const { App } = await import('@capacitor/app');
+    const info = await App.getInfo();
+    return Number(info.build) >= MIN_NATIVE_BUILD_FOR_GOOGLE;
+  } catch {
+    return false;
+  }
+}
 
 let started = false;
 
@@ -161,6 +183,14 @@ async function setupBackButton() {
 // ── App lifecycle ─────────────────────────────────────────────────────────
 async function setupAppLifecycle() {
   const { App } = await import('@capacitor/app');
+
+  // OAuth return (warm start: app was in the background behind the browser).
+  App.addListener('appUrlOpen', ({ url }) => { handleDeepLink(url); });
+  // Cold start: Android killed the app while the browser was open.
+  App.getLaunchUrl()
+    .then((res) => { if (res?.url) handleDeepLink(res.url); })
+    .catch(() => {});
+
   App.addListener('appStateChange', ({ isActive }) => {
     if (!isActive) return;
     emitResume();
@@ -169,6 +199,21 @@ async function setupAppLifecycle() {
       .then(({ checkForUpdate }) => checkForUpdate())
       .catch(() => {});
   });
+}
+
+// ── Deep links ────────────────────────────────────────────────────────────
+// Only the OAuth callback is handled today. Success needs no UI work here:
+// supabase-js fires onAuthStateChange(SIGNED_IN) and App.jsx swaps the sign-in
+// screen for the dashboard. Failures are forwarded to AuthScreen to display.
+let lastHandledUrl = '';
+async function handleDeepLink(url) {
+  if (!url || !url.startsWith(NATIVE_OAUTH_REDIRECT) || url === lastHandledUrl) return;
+  lastHandledUrl = url; // getLaunchUrl + appUrlOpen can both report the same URL
+  try {
+    await completeOAuthFromUrl(url);
+  } catch (err) {
+    window.dispatchEvent(new CustomEvent('astro:oauth-error', { detail: err?.message || String(err) }));
+  }
 }
 
 // ── Network ───────────────────────────────────────────────────────────────

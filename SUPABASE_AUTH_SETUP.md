@@ -94,6 +94,56 @@ That's it. The app already ships with the project URL + anon key baked in
 (build env vars `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`), so visitors
 just **Create Account → Sign In**. No keys to paste.
 
+## Step 3 — Sign in with Google
+
+The sign-in screen shows **Continue with Google** automatically once the
+Google provider is enabled in Supabase — the app reads the project's public
+`/auth/v1/settings` and hides the button until then. No code or redeploy is
+needed after this setup.
+
+### 3a. Google Cloud Console — create the OAuth client
+
+1. <https://console.cloud.google.com/> → pick (or create) a project.
+2. **APIs & Services → OAuth consent screen**: User type **External**; app
+   name *Astro-Transit*; your support email; under *Authorized domains* add
+   `supabase.co` and `penetacle.workers.dev`. Scopes: the defaults
+   (`email`, `profile`, `openid`) are all the app needs. While the app is in
+   *Testing* status only the test users you list can sign in — press
+   **Publish app** to open it to everyone.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - Authorized JavaScript origins: `https://astrology.penetacle.workers.dev`
+     (and `http://localhost:5173` for local testing)
+   - Authorized redirect URIs: **only** Supabase's callback —
+     `https://chpexdmbwbtdyqzfvmow.supabase.co/auth/v1/callback`
+4. Copy the **Client ID** and **Client secret**.
+
+### 3b. Supabase Dashboard — enable the provider
+
+1. **Authentication → Sign In / Providers → Google** → enable, paste the
+   Client ID and Client secret → Save.
+2. **Authentication → URL Configuration**:
+   - Site URL: `https://astrology.penetacle.workers.dev`
+   - Redirect URLs — add all of:
+     - `https://astrology.penetacle.workers.dev`
+     - `http://localhost:5173`
+     - `dev.penetacle.astrology://login-callback` (Android app)
+
+### How it behaves
+
+- **Web**: full-page redirect to Google's account chooser and back; supabase-js
+  reads the session from the returned URL. A cancelled sign-in comes back with
+  a friendly "Google sign-in was cancelled." message.
+- **Android**: Google blocks sign-in inside WebViews, so the app opens the
+  system browser and returns through the `dev.penetacle.astrology://login-callback`
+  deep link. This needs an APK built from `versionCode 2` or later (the intent
+  filter lives in `AndroidManifest.xml`); older installed APKs simply don't show
+  the Google button. See ANDROID_SETUP.md → "Google sign-in".
+- **Existing email accounts**: signing in with Google using the *same, already
+  confirmed* email address links to the existing Supabase user, so the same
+  profiles and charts appear. A different Google address creates a new,
+  empty account.
+
 ## How isolation works
 
 - Every request from a signed-in user carries their JWT. PostgREST evaluates the
